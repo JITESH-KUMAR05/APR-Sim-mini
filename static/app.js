@@ -241,6 +241,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 simModalOverlay.style.display = 'flex';
                 if (roverSim && currentData) {
                     roverSim.init(currentData);
+                    if (loadedImage2D && loadedImage2D.complete) {
+                        roverSim.sourceImage = loadedImage2D;
+                    }
                     roverSim.resize();
                     roverSim.render();
                 }
@@ -351,7 +354,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.loadedImage2D = loadedImage2D;
                 loadedImage2D.onload = () => {
                     render2DCanvas();
-                    if (roverSim) roverSim.render();
+                    if (roverSim) {
+                        roverSim.sourceImage = loadedImage2D;
+                        roverSim.render();
+                    }
                 };
                 loadedImage2D.src = data.image_data_url;
             } else {

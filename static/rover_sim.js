@@ -61,6 +61,9 @@ class RoverSimulation {
         // Particle system for airless spray effect
         this.particles = [];
 
+        // Source wall background image overlay
+        this.sourceImage = null;
+
         this.lastFrameTime = performance.now();
     }
 
@@ -70,6 +73,17 @@ class RoverSimulation {
         this.wall = missionData.wall;
         this.obstacles = missionData.obstacles || [];
         this.waypoints = missionData.waypoints || [];
+
+        // Preload dimmed original wall image overlay
+        if (missionData.image_data_url) {
+            this.sourceImage = new Image();
+            this.sourceImage.onload = () => {
+                this.render();
+            };
+            this.sourceImage.src = missionData.image_data_url;
+        } else if (window.loadedImage2D) {
+            this.sourceImage = window.loadedImage2D;
+        }
 
         // Calculate grid cells based on spray width
         const cellW_mm = Math.max(150, this.wall.spray_width_mm || 250);
@@ -261,8 +275,8 @@ class RoverSimulation {
             return;
         }
 
-        // Target angle in radians
-        this.rover.targetHeading = Math.atan2(dy_mm, dx_mm);
+        // Target angle in radians (canvas Y is inverted relative to wall Y)
+        this.rover.targetHeading = Math.atan2(-dy_mm, dx_mm);
 
         // Smooth heading turn
         let angleDiff = this.rover.targetHeading - this.rover.heading;
@@ -432,11 +446,16 @@ class RoverSimulation {
         this.ctx.fillStyle = '#0c1d24';
         this.ctx.fillRect(padX, padY, drawW, drawH);
 
-        // Draw background source photo if in hybrid/realistic mode
-        if (this.viewMode !== 'cells' && window.loadedImage2D) {
+        // Draw background source photo if in hybrid/realistic mode (dimmed but visible overlay)
+        const bgImg = this.sourceImage || window.loadedImage2D;
+        if (this.viewMode !== 'cells' && bgImg) {
             this.ctx.save();
-            this.ctx.globalAlpha = 0.22;
-            this.ctx.drawImage(window.loadedImage2D, padX, padY, drawW, drawH);
+            this.ctx.globalAlpha = (this.viewMode === 'realistic') ? 0.45 : 0.32;
+            try {
+                if (bgImg.complete && bgImg.naturalWidth > 0) {
+                    this.ctx.drawImage(bgImg, padX, padY, drawW, drawH);
+                }
+            } catch (e) {}
             this.ctx.restore();
         }
 

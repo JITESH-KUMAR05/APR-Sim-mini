@@ -164,11 +164,12 @@ class GeometryEngine:
         transit_dist_mm = 0.0
 
         for r in range(num_rows):
-            # Center of the spray nozzle pass in mm
-            y_curr = min(wall_h_mm - (spray_width_mm * 0.5), (r + 0.5) * effective_step)
+            # Center of the spray nozzle pass in mm - Sweep top-to-bottom starting at top-left
+            y_curr = wall_h_mm - ((r + 0.5) * effective_step)
+            y_curr = min(wall_h_mm - (spray_width_mm * 0.5), y_curr)
             y_curr = max(spray_width_mm * 0.5, y_curr)
 
-            # Determine pass direction: Even rows L->R, Odd rows R->L
+            # Determine pass direction: Even rows L->R (starts top-left), Odd rows R->L
             left_to_right = (r % 2 == 0)
 
             # Find obstacle intervals intersecting this horizontal pass
@@ -246,7 +247,9 @@ class GeometryEngine:
 
             # Add vertical inter-row transition waypoint if not at final row
             if r < num_rows - 1:
-                next_y = min(wall_h_mm - (spray_width_mm * 0.5), (r + 1.5) * effective_step)
+                next_y = wall_h_mm - ((r + 1.5) * effective_step)
+                next_y = min(wall_h_mm - (spray_width_mm * 0.5), next_y)
+                next_y = max(spray_width_mm * 0.5, next_y)
                 last_pt = waypoints[-1]
                 trans_pt = {
                     "seq": len(waypoints) + 1,
