@@ -17,11 +17,11 @@ from flask_cors import CORS
 from geometry_engine import GeometryEngine
 from cad_exporter import CADExporter
 
-app = Flask(__name__, static_folder="static", template_folder="templates")
-CORS(app)
-
-# Ensure required directories exist (use /tmp on serverless platforms like Vercel)
+# Define absolute paths for static assets and templates (vital for Vercel/serverless environments)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+
 if os.environ.get("VERCEL") or not os.access(BASE_DIR, os.W_OK):
     EXPORTS_DIR = os.path.join("/tmp", "exports")
 else:
@@ -29,6 +29,9 @@ else:
 SAMPLES_DIR = os.path.join(BASE_DIR, "samples")
 os.makedirs(EXPORTS_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
+
+app = Flask(__name__, static_folder=STATIC_DIR, template_folder=TEMPLATES_DIR, static_url_path="/static")
+CORS(app)
 
 geometry_engine = GeometryEngine()
 cad_exporter = CADExporter()
@@ -48,6 +51,12 @@ current_session = {
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/static/<path:filename>")
+def serve_static(filename):
+    """Explicit static handler for serverless environments (Vercel)."""
+    return send_from_directory(STATIC_DIR, filename)
 
 
 @app.route("/api/samples", methods=["GET"])
