@@ -53,6 +53,11 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/about")
+def about():
+    return render_template("about.html")
+
+
 @app.route("/static/<path:filename>")
 def serve_static(filename):
     """Explicit static handler for serverless environments (Vercel)."""

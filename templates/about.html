@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automated Painting Rover — Anurag University</title>
+<meta name="description" content="A wall-climbing robot that paints building exteriors so painters don't have to work at height. In development at Anurag University under the MSME Incubation Scheme.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --concrete:#dedbd2;
+    --concrete-2:#d2cec2;
+    --paper:#e8e5dc;
+    --ink:#1b1d1c;
+    --ink-2:#2a2d2b;
+    --steel:#3c5a66;
+    --steel-dp:#24343b;
+    --rust:#b8420f;
+    --muted:#6b6f6a;
+    --rule:#b9b6ac;
+    --maxw:920px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{
+    margin:0;background:var(--concrete);color:var(--ink);
+    font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:17px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{font-family:'IBM Plex Sans Condensed','IBM Plex Sans',sans-serif;font-weight:600;letter-spacing:0;color:var(--ink)}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  a{color:var(--steel)}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+
+  /* ---------- title block (drawing-sheet stamp) ---------- */
+  .stamp{background:var(--ink);color:#cfd3ce;border-bottom:3px solid var(--rust)}
+  .stamp .wrap{
+    display:flex;flex-wrap:wrap;gap:0;padding:0;
+  }
+  .stamp .field{
+    padding:10px 18px;border-right:1px solid #3a3d3a;font-size:13px;
+  }
+  .stamp .field:last-child{border-right:0;margin-left:auto}
+  .stamp .field b{display:block;color:#fff;font-size:14.5px;font-weight:500;font-family:'IBM Plex Mono',monospace}
+  .stamp .field span{color:#8f938d;letter-spacing:.02em}
+  @media (max-width:760px){
+    .stamp .field:last-child{margin-left:0}
+    .stamp .field{padding:9px 14px}
+  }
+
+  /* ---------- sheet-margin ruler / nav ---------- */
+  .ruler{
+    position:fixed;left:0;top:0;bottom:0;width:54px;z-index:5;
+    display:flex;flex-direction:column;justify-content:center;
+    pointer-events:none;
+  }
+  .ruler ol{list-style:none;margin:0;padding:0 0 0 12px;border-left:1px solid var(--rule)}
+  .ruler li{
+    position:relative;font-family:'IBM Plex Mono',monospace;font-size:12px;
+    color:var(--muted);padding:11px 0;
+  }
+  .ruler li::before{
+    content:"";position:absolute;left:-13px;top:50%;width:7px;height:1px;background:var(--rule);
+  }
+  .ruler li.on{color:var(--rust);font-weight:500}
+  .ruler li.on::before{width:12px;height:2px;background:var(--rust);left:-13px}
+  .ruler a{pointer-events:auto;color:inherit;text-decoration:none}
+  @media (max-width:1180px){.ruler{display:none}}
+
+  /* ---------- hero ---------- */
+  .hero{padding:58px 0 0}
+  .hero .inner{
+    max-width:var(--maxw);margin:0 auto;padding:0 28px;
+    display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center;
+  }
+  .hero h1{
+    font-size:clamp(32px,4.1vw,46px);line-height:1.08;margin:0 0 18px;
+    font-weight:700;letter-spacing:-.005em;max-width:16ch;
+  }
+  .hero p.sub{font-size:18px;color:var(--ink-2);margin:0 0 26px;max-width:44ch;font-weight:400}
+  .hero .cta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:0}
+  .btn{
+    display:inline-block;padding:11px 20px;text-decoration:none;
+    font-family:'IBM Plex Sans Condensed',sans-serif;font-size:16.5px;font-weight:600;
+    border:1px solid var(--ink);
+  }
+  .btn-a{background:var(--ink);color:#f2f0ea}
+  .btn-b{background:transparent;color:var(--ink)}
+  .btn:focus-visible,a:focus-visible,button:focus-visible{outline:2px solid var(--rust);outline-offset:3px}
+
+  .diagram{width:100%;max-width:360px;justify-self:center}
+  .diagram svg{width:100%;height:auto;display:block}
+  .diagram .cap{font-size:12.5px;color:var(--muted);text-align:center;margin-top:6px}
+
+  #sprayfill{transform-box:fill-box;transform-origin:50% 100%;animation:fill 2.6s ease-out .4s both}
+  #roverbox{animation:climb 2.6s cubic-bezier(.4,0,.3,1) .4s both}
+  @keyframes fill{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+  @keyframes climb{from{transform:translateY(0)}to{transform:translateY(-172px)}}
+  @media (prefers-reduced-motion:reduce){
+    #sprayfill{animation:none;transform:scaleY(1)}
+    #roverbox{animation:none;transform:translateY(-172px)}
+  }
+
+  .heroband{
+    border-top:1px solid var(--rule);margin-top:40px;
+    display:grid;grid-template-columns:repeat(4,1fr);
+  }
+  .heroband div{padding:16px 20px 20px;border-right:1px solid var(--rule)}
+  .heroband div:last-child{border-right:0}
+  .heroband b{display:block;font-family:'IBM Plex Mono',monospace;font-size:22px;color:var(--ink);font-weight:500;line-height:1.15}
+  .heroband span{font-size:13px;color:var(--muted)}
+
+  /* ---------- sections ---------- */
+  section{padding:64px 0;border-top:1px solid var(--rule)}
+  section.alt{background:var(--paper)}
+  h2{font-size:clamp(24px,3.1vw,32px);margin:0 0 6px;line-height:1.1;max-width:22ch}
+  .sec-note{color:var(--muted);margin:0 0 28px;max-width:58ch;font-size:16px}
+  .lead{font-size:18px;max-width:60ch;font-weight:400;line-height:1.65;color:var(--ink-2)}
+
+  /* problem */
+  .incident{
+    border-left:3px solid var(--rust);padding:6px 0 6px 22px;
+    max-width:58ch;margin:26px 0 0;
+  }
+  .incident p{margin:0 0 8px;font-size:16.5px;color:var(--ink-2)}
+  .incident p:last-child{margin:0;color:var(--muted);font-style:italic}
+  .incident .who{font-family:'IBM Plex Sans Condensed',sans-serif;font-size:19px;color:var(--ink);font-weight:600}
+
+  .three{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:34px}
+  .three h3{font-size:18px;margin:0 0 6px;font-weight:600}
+  .three p{margin:0;font-size:15.5px;color:var(--muted);line-height:1.55}
+
+  /* subsystems */
+  .sys{margin-top:26px;border-top:1px solid var(--rule)}
+  .sysrow{display:grid;grid-template-columns:200px 1fr;gap:28px;
+          padding:20px 0;border-bottom:1px solid var(--rule);align-items:baseline}
+  .sysrow .tag{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--rust);display:block;margin-bottom:4px}
+  .sysrow h3{margin:0;font-size:20px}
+  .sysrow p{margin:0;font-size:16px;color:var(--muted);line-height:1.58;max-width:58ch}
+  .sysrow p b{color:var(--ink);font-weight:500}
+
+  /* specs */
+  .tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{min-width:420px;width:100%;border-collapse:collapse;margin-top:24px;font-size:15.5px}
+  caption{text-align:left;color:var(--muted);font-size:14.5px;padding-bottom:10px}
+  th{
+    text-align:left;font-family:'IBM Plex Sans Condensed',sans-serif;font-weight:600;font-size:15px;
+    padding:9px 12px;border-bottom:2px solid var(--ink);color:var(--ink);
+  }
+  td{padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+  td.num{font-family:'IBM Plex Mono',monospace;white-space:nowrap;color:var(--ink);font-size:14.5px}
+
+  /* crew: roster, not avatar cards */
+  .roster{margin-top:30px;border-top:1px solid var(--rule)}
+  .row{
+    display:grid;grid-template-columns:64px 1fr auto;gap:18px;align-items:center;
+    padding:16px 0;border-bottom:1px solid var(--rule);
+  }
+  .chip{
+    width:56px;height:56px;background:var(--ink);color:#e8e5dc;
+    display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;flex-shrink:0;
+  }
+  .chip img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+  .chip span{font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:500;z-index:1}
+  .row h3{margin:0;font-size:18px;font-weight:600}
+  .row p{margin:2px 0 0;font-size:14.5px;color:var(--muted)}
+  .row .id{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--muted)}
+
+  .faculty{
+    display:grid;grid-template-columns:120px 1fr;gap:24px;align-items:start;
+    margin-top:26px;padding-top:22px;border-top:2px solid var(--ink);
+  }
+  .faculty .chip{width:100%;height:150px}
+  .faculty .chip span{font-size:30px}
+  .faculty h3{margin:0 0 3px;font-size:21px}
+  .faculty .role{color:var(--steel);font-size:15px;margin:0 0 12px;font-weight:500}
+  .faculty p{margin:0 0 10px;font-size:15.5px;color:var(--ink-2);max-width:56ch}
+
+  /* status: real sequence, so numbered by date/rev is legitimate */
+  .phases{margin-top:26px;border-top:1px solid var(--rule)}
+  .phase{
+    display:grid;grid-template-columns:110px 1fr;gap:22px;
+    padding:16px 0;border-bottom:1px solid var(--rule);align-items:baseline;
+  }
+  .phase .when{font-family:'IBM Plex Mono',monospace;font-size:14px;color:var(--muted)}
+  .phase h3{margin:0 0 4px;font-size:18px}
+  .phase p{margin:0;color:var(--muted);font-size:15.5px}
+  .phase.now .when{color:var(--rust)}
+  .phase.now h3::after{
+    content:"in progress";margin-left:10px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;
+    color:var(--rust);border:1px solid var(--rust);padding:1px 6px;
+    font-weight:500;vertical-align:middle;
+  }
+
+  /* footer stamp */
+  footer{background:var(--ink);color:#b7bbb6;padding:40px 0 30px;font-size:15px}
+  footer h3{color:#f2f0ea;font-size:19px;margin:0 0 10px}
+  footer a{color:#8fb3bd}
+  .fgrid{display:grid;grid-template-columns:1.4fr 1fr;gap:34px}
+  .fnote{margin-top:28px;padding-top:16px;border-top:1px solid #3a3d3a;font-size:13px;color:#7d827c}
+
+  @media (max-width:820px){
+    .hero .inner{grid-template-columns:1fr;padding-top:8px;gap:26px}
+    .diagram{order:-1;max-width:260px}
+    .heroband{grid-template-columns:repeat(2,1fr)}
+    .heroband div:nth-child(2){border-right:0}
+    .three{grid-template-columns:1fr}
+    .sysrow{grid-template-columns:1fr;gap:6px}
+    .faculty{grid-template-columns:1fr;gap:16px}
+    .faculty .chip{max-width:150px}
+    .phase{grid-template-columns:1fr;gap:4px}
+    .fgrid{grid-template-columns:1fr}
+    .row{grid-template-columns:48px 1fr;grid-template-areas:"chip name" "chip id"}
+    .row .chip{grid-area:chip;width:48px;height:48px}
+    .row h3{grid-area:name}
+    .row .id{grid-area:id}
+    table{font-size:14.5px}
+    th,td{padding:8px 9px}
+    section{padding:48px 0}
+  }
+</style>
+</head>
+<body>
+
+<div class="stamp">
+  <div class="wrap">
+    <div class="field"><span>sheet</span><b>APR&#8209;00</b></div>
+    <div class="field"><span>project</span><b>Automated Painting Rover</b></div>
+    <div class="field"><span>rev</span><b>0.3</b></div>
+    <div class="field"><span>status</span><b>MSME Incubation · INC25ETS084848</b></div>
+  </div>
+</div>
+
+<nav class="ruler" aria-label="Page sections">
+  <ol>
+    <li class="on"><a href="#overview">B</a></li>
+    <li><a href="#problem">C</a></li>
+    <li><a href="#how">D</a></li>
+    <li><a href="#specs">E</a></li>
+    <li><a href="#crew">F</a></li>
+    <li><a href="#status">G</a></li>
+  </ol>
+</nav>
+
+<header class="hero" id="overview">
+  <div class="inner">
+    <div>
+      <h1>A robot climbs the wall so a person doesn't have to.</h1>
+      <p class="sub">The Automated Painting Rover grips vertical concrete by vacuum, drives itself across the surface, and sprays an even coat, while the operator stays on the ground.</p>
+      <div class="cta">
+        <a class="btn btn-a" href="#how">See how it works</a>
+        <a class="btn btn-b" href="/">Open the CAD console</a>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <svg viewBox="0 0 300 380" role="img" aria-label="Orthographic elevation of the rover on a wall, with the completed and in-progress painted strips, and leader lines labelling the vacuum plenum, track drive, spray arm and vision camera.">
+        <rect x="10" y="8" width="230" height="300" fill="none" stroke="#8a8d87" stroke-width="1"/>
+        <g stroke="#c3c0b6" stroke-width="1">
+          <line x1="10" y1="68" x2="240" y2="68"/><line x1="10" y1="128" x2="240" y2="128"/>
+          <line x1="10" y1="188" x2="240" y2="188"/><line x1="10" y1="248" x2="240" y2="248"/>
+        </g>
+        <rect x="40" y="88" width="46" height="200" fill="#3c5a66" opacity=".28"/>
+        <rect id="sprayfill" x="96" y="88" width="46" height="200" fill="#3c5a66" opacity=".55"/>
+
+        <g id="roverbox">
+          <rect x="90" y="252" width="60" height="28" fill="#1b1d1c"/>
+          <rect x="96" y="257" width="48" height="7" fill="#8a9a9f"/>
+          <circle cx="144" cy="273" r="2.6" fill="#b8420f"/>
+        </g>
+
+        <g stroke="#6b6f6a" stroke-width="1" fill="none">
+          <path d="M150 258 L 210 234"/>
+          <path d="M144 252 L 210 200"/>
+          <path d="M108 252 L 60 218"/>
+          <path d="M114 258 L 60 260"/>
+        </g>
+        <g font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#4b4f4a">
+          <text x="212" y="237">vacuum plenum</text>
+          <text x="212" y="203">track drive</text>
+          <text x="16" y="216">spray arm</text>
+          <text x="16" y="264">vision camera</text>
+        </g>
+
+        <line x1="10" y1="326" x2="240" y2="326" stroke="#8a8d87" stroke-width="1"/>
+        <line x1="10" y1="320" x2="10" y2="332" stroke="#8a8d87" stroke-width="1"/>
+        <line x1="240" y1="320" x2="240" y2="332" stroke="#8a8d87" stroke-width="1"/>
+        <text x="118" y="345" font-family="IBM Plex Mono, monospace" font-size="11" fill="#6b6f6a">4000 mm</text>
+      </svg>
+      <p class="cap">Elevation view, wall + rover, not to scale on screen</p>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="heroband">
+      <div><b>₹15 lakh</b><span>Sanctioned funding</span></div>
+      <div><b>10 m²/hr</b><span>Target coverage rate</span></div>
+      <div><b>0</b><span>People working at height</span></div>
+      <div><b>12–15 mo</b><span>Development timeline</span></div>
+    </div>
+  </div>
+</header>
+
+<section id="problem">
+  <div class="wrap">
+    <h2>Why we started this</h2>
+    <p class="sec-note">Painting a tall building still means putting a person on a rope.</p>
+    <p class="lead">Exterior painting in India is done from suspended platforms, bamboo scaffolding and rope cradles. The work is slow, the finish varies from one worker to the next, and the fall risk is real and recurring. Every year, painters die doing a job that a machine could do instead.</p>
+
+    <div class="incident">
+      <p class="who">Parameswar Reddy, 50</p>
+      <p>On 30 May 2026, a painter died after the suspended platform he was working from tilted on the third floor of a residential building under construction in Emmiganur, Kurnool district.</p>
+      <p>He is the reason this project exists.</p>
+    </div>
+
+    <div class="three">
+      <div>
+        <h3>Falls from height</h3>
+        <p>Suspended platforms and rope access remain a leading cause of construction fatalities. Harnesses reduce the risk; they don't remove it.</p>
+      </div>
+      <div>
+        <h3>Uneven finish</h3>
+        <p>Hand spraying leaves patches too thick, too thin, or missed entirely, and quality changes with fatigue and with each worker.</p>
+      </div>
+      <div>
+        <h3>The cost of access</h3>
+        <p>On a tall wall, scaffolding and access can cost several times more than the painting labour itself, before any paint is opened.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="how">
+  <div class="wrap">
+    <h2>How the machine works</h2>
+    <p class="sec-note">An operator places the rover at the base of the wall, anchors a safety line, and works from a ground station. Paint and power run up a single umbilical line.</p>
+
+    <div class="sys">
+      <div class="sysrow">
+        <div class="tag">adhesion</div>
+        <div><h3>Vacuum plenum</h3></div>
+        <p>A fan continuously draws air out of a chamber behind a soft skirt, so outside air pressure presses the rover into the wall and friction holds it up. Because nothing depends on a sealed cup, it keeps gripping on <b>rough, porous plaster</b> where ordinary suction cups slip.</p>
+      </div>
+      <div class="sysrow">
+        <div class="tag">drive</div>
+        <div><h3>Track drive</h3></div>
+        <p>Tracks spread the load over a larger contact patch than wheels. That keeps the pressure differential stable <b>while the rover is moving</b>, not only while it is parked.</p>
+      </div>
+      <div class="sysrow">
+        <div class="tag">application</div>
+        <div><h3>Airless spray arm</h3></div>
+        <p>A nozzle on a short arm sprays while a distance sensor holds a fixed standoff from the wall, so film thickness stays even across the surface instead of drifting as the rover moves.</p>
+      </div>
+      <div class="sysrow">
+        <div class="tag">perception</div>
+        <div><h3>Vision and coverage planning</h3></div>
+        <p>An onboard camera picks out windows, pipes and edges to route around. The coverage planner divides the wall into cells and sweeps them back and forth, an approach that can be <b>proven to reach every point</b> rather than merely most of them.</p>
+      </div>
+      <div class="sysrow">
+        <div class="tag">safety</div>
+        <div><h3>Interlocks</h3></div>
+        <p>Grip pressure and tilt are checked continuously against fixed limits. A physical emergency stop and an independent safety line sit <b>outside the software entirely</b>, so a fault in the control system cannot take them away.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="specs">
+  <div class="wrap">
+    <h2>What we are building to</h2>
+    <p class="sec-note">Engineering targets fixed in the requirements phase. Each one is measurable, and each will be tested on the prototype rather than asserted.</p>
+    <div class="tablewrap">
+    <table>
+      <caption>Prototype targets — to be verified during testing</caption>
+      <thead>
+        <tr><th style="width:44%">Requirement</th><th style="width:26%">Target</th><th>How it is measured</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Speed on a vertical surface</td><td class="num">0.1–0.5 m/s</td><td>Encoder / tachometer</td></tr>
+        <tr><td>Load carried on the wall</td><td class="num">≥ 15 kg</td><td>Load cell test</td></tr>
+        <tr><td>Vacuum adhesion force</td><td class="num">≥ 2× rover weight</td><td>Pull-off test</td></tr>
+        <tr><td>Surface coverage</td><td class="num">≥ 10 m²/hr</td><td>Area painted ÷ time taken</td></tr>
+        <tr><td>Coat thickness</td><td class="num">50 µm ± 15 µm</td><td>Dry film thickness gauge</td></tr>
+        <tr><td>Coat uniformity</td><td class="num">≥ 90%</td><td>Camera image analysis</td></tr>
+        <tr><td>Onboard paint capacity</td><td class="num">≥ 5 L</td><td>Volume measurement</td></tr>
+        <tr><td>Operating duration</td><td class="num">≥ 4 hr</td><td>Continuous run test</td></tr>
+        <tr><td>Emergency stop response</td><td class="num">≤ 0.5 s</td><td>Response timing test</td></tr>
+        <tr><td>Environmental protection</td><td class="num">IP54</td><td>Dust and splash rating</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="crew">
+  <div class="wrap">
+    <h2>The team</h2>
+    <p class="sec-note">Students of the Department of Information Technology, Anurag University, Hyderabad.</p>
+
+    <!-- Photos: put files under static/photos/ and set src below.
+         Missing file removes the <img>, leaving the initials chip. -->
+    <div class="roster">
+      <div class="row">
+        <div class="chip"><span>VK</span><img src="/static/photos/vineel.jpg" alt="" onerror="this.remove()"></div>
+        <div><h3>Vineel Krishna</h3><p>B.Tech, Information Technology</p></div>
+        <div class="id">M&#8209;01</div>
+      </div>
+      <div class="row">
+        <div class="chip"><span>JK</span><img src="/static/photos/jitesh.jpg" alt="" onerror="this.remove()"></div>
+        <div><h3>Jitesh Kumar</h3><p>B.Tech, Information Technology</p></div>
+        <div class="id">M&#8209;02</div>
+      </div>
+      <div class="row">
+        <div class="chip"><span>PS</span><img src="/static/photos/srujana.jpg" alt="" onerror="this.remove()"></div>
+        <div><h3>Polluri Sai Srujana</h3><p>B.Tech, Information Technology</p></div>
+        <div class="id">M&#8209;03</div>
+      </div>
+      <div class="row">
+        <div class="chip"><span>MG</span><img src="/static/photos/gopi.jpg" alt="" onerror="this.remove()"></div>
+        <div><h3>More Gopi</h3><p>B.Tech, Information Technology</p></div>
+        <div class="id">M&#8209;04</div>
+      </div>
+    </div>
+
+    <div class="faculty">
+      <div class="chip"><span>AB</span><img src="/static/photos/anand-babu.jpg" alt="" onerror="this.remove()"></div>
+      <div>
+        <h3>Dr. G. L. Anand Babu</h3>
+        <p class="role">Assistant Professor, Department of IT, Anurag University</p>
+        <p>Ph.D. in Computer Science from Osmania University. Twenty-two years of teaching experience, with 22 published research papers, 3 authored books and 4 patents.</p>
+        <p>His work spans NLP, text mining, big data and mobile computing. He guides the AI, sensing and system integration side of the rover.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <h2>Where the project stands</h2>
+    <p class="sec-note">The concept phase is complete. We are moving into mechanism selection and detailed design.</p>
+    <div class="phases">
+      <div class="phase">
+        <span class="when">rev 0.1</span>
+        <div>
+          <h3>Use case fixed</h3>
+          <p>One target application chosen and scoped: flat vertical concrete and cement-plastered exterior walls.</p>
+        </div>
+      </div>
+      <div class="phase">
+        <span class="when">rev 0.2</span>
+        <div>
+          <h3>Requirements defined</h3>
+          <p>Every performance and safety target written as a measurable number with a test method attached.</p>
+        </div>
+      </div>
+      <div class="phase now">
+        <span class="when">rev 0.3</span>
+        <div>
+          <h3>Mechanism selection</h3>
+          <p>Comparing adhesion, drive and spray options against the requirements, and sourcing components within the sanctioned budget.</p>
+        </div>
+      </div>
+      <div class="phase">
+        <span class="when">rev 0.4</span>
+        <div>
+          <h3>Design and prototype build</h3>
+          <p>Mechanical CAD, electrical architecture and control design, then assembly of the first working rover.</p>
+        </div>
+      </div>
+      <div class="phase">
+        <span class="when">rev 0.5</span>
+        <div>
+          <h3>Testing on a wall</h3>
+          <p>Adhesion and coverage trials on low walls first, moving higher only once reliability is demonstrated.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div>
+        <h3>Automated Painting Rover</h3>
+        <p style="margin:0 0 8px">A student research and development project of the Department of Information Technology, Anurag University, Hyderabad, selected for funding under the MSME Incubation Scheme.</p>
+        <p style="margin:0">Reference number INC25ETS084848</p>
+      </div>
+      <div>
+        <h3>Get in touch</h3>
+        <p style="margin:0 0 6px">Faculty mentor: <a href="mailto:anandbabuit@anurag.edu.in">anandbabuit@anurag.edu.in</a></p>
+        <p style="margin:0">Department of IT, Anurag University, Venkatapur, Hyderabad, Telangana</p>
+      </div>
+    </div>
+    <p class="fnote">Figures on this page are prototype design targets, not measured results. The rover is in development and has not yet been built or tested.</p>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.ruler li'));
+    var ids = links.map(function (li) { return li.querySelector('a').getAttribute('href').slice(1); });
+    var sections = ids.map(function (id) { return document.getElementById(id); });
+
+    function update() {
+      var line = window.scrollY + window.innerHeight * 0.34;
+      var active = 0;
+      sections.forEach(function (sec, i) {
+        if (sec && sec.offsetTop <= line) active = i;
+      });
+      links.forEach(function (li, i) { li.classList.toggle('on', i === active); });
+    }
+    var ticking = false;
+    window.addEventListener('scroll', function () {
+      if (!ticking) {
+        window.requestAnimationFrame(function () { update(); ticking = false; });
+        ticking = true;
+      }
+    }, { passive: true });
+    update();
+  })();
+</script>
+
+</body>
+</html>
