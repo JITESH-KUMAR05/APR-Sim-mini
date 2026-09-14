@@ -788,5 +788,6 @@ class RoverSimulation {
     }
 }
 
+
 // Attach to window
 window.RoverSimulation = RoverSimulation;
