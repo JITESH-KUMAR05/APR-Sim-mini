@@ -244,7 +244,7 @@ class CADExporter:
                 g4 = add_vertex(wx1, wy2, wz, *CLR_WINDOW_GLASS)
                 add_face(gname + "_Glazing", "Window_Glazing_Material", (g1, g2, g3, g4))
 
-            elif obs["type"] == "switchboard":
+            elif obs["type"] in ("switchboard", "meter_panel"):
                 inset_x = ow * 0.12
                 inset_y = oh * 0.12
                 sx1 = ox + inset_x

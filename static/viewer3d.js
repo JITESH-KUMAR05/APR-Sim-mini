@@ -245,7 +245,7 @@ class WallViewer3D {
                 frameLine.position.set(ox, oy, 0.008);
                 this.obstacleGroup.add(frameLine);
 
-            } else if (obs.type === 'switchboard') {
+            } else if (obs.type === 'switchboard' || obs.type === 'meter_panel') {
                 // Extruded fixture
                 const fixGeom = new THREE.BoxGeometry(ow, oh, 0.04);
                 const fixMat = new THREE.MeshStandardMaterial({
