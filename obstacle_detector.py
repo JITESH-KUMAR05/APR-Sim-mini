@@ -3,7 +3,10 @@ Learned obstacle detector: YOLO ONNX pre/post-processing and inference wrapper.
 Kept free of Flask and GeometryEngine so it can be tested without a model file.
 """
 
-from typing import List, Sequence, Tuple
+import logging
+import os
+from dataclasses import dataclass
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -103,3 +106,65 @@ def thresholds_for_sensitivity(sensitivity: float) -> Tuple[float, float]:
     """Map the UI sensitivity slider to (review_threshold, accept_threshold)."""
     review = min(0.40, max(0.10, 0.40 - 0.30 * sensitivity))
     return review, review + 0.25
+
+
+DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "apr_obstacles.onnx")
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Detection:
+    class_name: str
+    confidence: float
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+
+class ObstacleDetector:
+    """Runs a YOLO ONNX model. Pass `session` to inject a fake in tests."""
+
+    def __init__(self, model_path: Optional[str] = None, session=None, class_names: Sequence[str] = CLASS_NAMES):
+        if session is None:
+            import onnxruntime as ort  # imported lazily so the fallback path never needs it
+
+            session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        self._session = session
+        self._input_name = session.get_inputs()[0].name
+        self.class_names = list(class_names)
+
+    def detect(self, image_bgr: np.ndarray, min_score: float) -> List[Detection]:
+        img_h, img_w = image_bgr.shape[:2]
+        canvas, scale, pad = letterbox(image_bgr)
+        output = self._session.run(None, {self._input_name: to_input_tensor(canvas)})[0]
+        model_classes = output.shape[-2] - 4
+        if model_classes != len(self.class_names):
+            raise ValueError(
+                f"Model has {model_classes} classes but {len(self.class_names)} are configured"
+            )
+
+        boxes, scores, class_ids = decode(output, scale, pad, (img_w, img_h), min_score)
+        big_enough = ((boxes[:, 2] - boxes[:, 0]) >= MIN_BOX_FRACTION * img_w) & (
+            (boxes[:, 3] - boxes[:, 1]) >= MIN_BOX_FRACTION * img_h
+        )
+        boxes, scores, class_ids = boxes[big_enough], scores[big_enough], class_ids[big_enough]
+
+        detections = []
+        for i in nms(boxes, scores, class_ids):
+            x1, y1, x2, y2 = (float(v) for v in boxes[i])
+            detections.append(Detection(self.class_names[int(class_ids[i])], float(scores[i]), x1, y1, x2, y2))
+        return detections
+
+
+def load_default_detector() -> Optional[ObstacleDetector]:
+    """Load the shipped model, or return None so callers fall back to classical detection."""
+    path = os.environ.get("APR_OBSTACLE_MODEL", DEFAULT_MODEL_PATH)
+    if not os.path.exists(path):
+        return None
+    try:
+        return ObstacleDetector(model_path=path)
+    except Exception as exc:  # a corrupt or wrong-format model must not take the app down
+        log.warning("Could not load obstacle model %s: %s", path, exc)
+        return None

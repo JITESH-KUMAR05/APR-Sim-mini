@@ -1,6 +1,8 @@
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -9,8 +11,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from obstacle_detector import (
     CLASS_NAMES,
     INPUT_SIZE,
+    ObstacleDetector,
     decode,
     letterbox,
+    load_default_detector,
     nms,
     thresholds_for_sensitivity,
     to_input_tensor,
@@ -125,6 +129,69 @@ class TestThresholds(unittest.TestCase):
     def test_review_threshold_is_clamped(self):
         self.assertAlmostEqual(thresholds_for_sensitivity(5.0)[0], 0.10)
         self.assertAlmostEqual(thresholds_for_sensitivity(-5.0)[0], 0.40)
+
+
+class FakeInput:
+    name = "images"
+
+
+class FakeSession:
+    def __init__(self, output):
+        self.output = output
+        self.feeds = []
+
+    def get_inputs(self):
+        return [FakeInput()]
+
+    def run(self, output_names, feeds):
+        self.feeds.append(feeds)
+        return [self.output]
+
+
+class TestObstacleDetector(unittest.TestCase):
+    IMAGE = np.zeros((600, 1200, 3), dtype=np.uint8)
+
+    def test_detect_maps_boxes_back_to_the_original_image(self):
+        session = FakeSession(make_output([(320, 320, 64, 64, 0, 0.9)]))
+        detections = ObstacleDetector(session=session).detect(self.IMAGE, min_score=0.25)
+        self.assertEqual(len(detections), 1)
+        det = detections[0]
+        self.assertEqual(det.class_name, "window")
+        self.assertAlmostEqual(det.confidence, 0.9, places=5)
+        self.assertAlmostEqual(det.x1, 540, delta=0.01)
+        self.assertAlmostEqual(det.y2, 360, delta=0.01)
+        self.assertEqual(session.feeds[0]["images"].shape, (1, 3, 640, 640))
+
+    def test_boxes_under_half_a_percent_of_the_frame_are_dropped(self):
+        # 1.6 px in letterbox space is 3 px (0.25%) of a 1200 px wide image
+        session = FakeSession(make_output([(320, 320, 1.6, 64, 0, 0.9), (100, 300, 64, 64, 1, 0.8)]))
+        detections = ObstacleDetector(session=session).detect(self.IMAGE, min_score=0.25)
+        self.assertEqual([d.class_name for d in detections], ["door"])
+
+    def test_duplicate_detections_are_suppressed(self):
+        session = FakeSession(make_output([(320, 320, 64, 64, 0, 0.9), (322, 322, 64, 64, 0, 0.7)]))
+        self.assertEqual(len(ObstacleDetector(session=session).detect(self.IMAGE, 0.25)), 1)
+
+    def test_class_count_mismatch_raises(self):
+        bad = np.zeros((1, 4 + NUM_CLASSES + 1, 5), dtype=np.float32)
+        with self.assertRaises(ValueError):
+            ObstacleDetector(session=FakeSession(bad)).detect(self.IMAGE, 0.25)
+
+
+class TestLoadDefaultDetector(unittest.TestCase):
+    def test_missing_model_returns_none(self):
+        missing = os.path.join(os.path.dirname(__file__), "no_such_model.onnx")
+        with mock.patch.dict(os.environ, {"APR_OBSTACLE_MODEL": missing}):
+            self.assertIsNone(load_default_detector())
+
+    def test_unreadable_model_returns_none(self):
+        with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as handle:
+            handle.write(b"this is not an onnx model")
+        try:
+            with mock.patch.dict(os.environ, {"APR_OBSTACLE_MODEL": handle.name}):
+                self.assertIsNone(load_default_detector())
+        finally:
+            os.remove(handle.name)
 
 
 if __name__ == "__main__":
