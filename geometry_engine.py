@@ -7,12 +7,33 @@ Boustrophedon coverage path planning, and quantitative engineering metrics.
 
 import cv2
 import numpy as np
+import logging
 import math
 from typing import Dict, List, Tuple, Any, Optional
 
+from obstacle_detector import ObstacleDetector, thresholds_for_sensitivity
+
+log = logging.getLogger(__name__)
+
+# type -> (label prefix, depth_mm). depth_mm only drives the 3D export.
+OBSTACLE_CLASS_INFO = {
+    "window": ("Glazed Window", 120.0),
+    "door": ("Door Opening", 80.0),
+    "ac_unit": ("AC Unit", 400.0),
+    "meter_panel": ("Meter Panel", 100.0),
+    "pipe": ("Pipe", 80.0),
+    "grill": ("Grill", 60.0),
+}
+UNVERIFIED_INFO = ("Unverified object", 50.0)
+LEGACY_OBSTACLE_INFO = {  # types still emitted by the classical fallback
+    "switchboard": ("Utility Panel", 35.0),
+    "fixture": ("Architectural Opening", 50.0),
+}
+
 
 class GeometryEngine:
-    def __init__(self):
+    def __init__(self, detector: Optional[ObstacleDetector] = None):
+        self.detector = detector
         # Default physical parameters mapped to APR Design Review (WBS 1.2 §3)
         self.defaults = {
             "width_mm": 4000.0,
@@ -28,7 +49,97 @@ class GeometryEngine:
             "transfer_efficiency": 0.90     # Airless nozzle: <=10% overspray loss
         }
 
+    def detect(
+        self,
+        image_bgr: np.ndarray,
+        wall_w_mm: float,
+        wall_h_mm: float,
+        sensitivity: float = 0.5
+    ) -> Dict[str, Any]:
+        """
+        Detect obstacles in wall millimetre coordinates (origin bottom-left).
+        Uses the trained detector when loaded, otherwise the classical fallback.
+        Returns {"obstacles", "confidence", "detector"}; confidence is a percentage
+        or None when the model kept no detections.
+        """
+        detections = None
+        review_threshold, accept_threshold = thresholds_for_sensitivity(sensitivity)
+        if self.detector is not None:
+            try:
+                detections = self.detector.detect(image_bgr, min_score=review_threshold)
+            except Exception as exc:  # a broken model must never take the pipeline down
+                log.warning("Obstacle detector failed (%s); using classical fallback", exc)
+
+        if detections is None:
+            obstacles, confidence = self._detect_classical(image_bgr, wall_w_mm, wall_h_mm, sensitivity)
+            return {"obstacles": obstacles, "confidence": confidence, "detector": "classical-fallback"}
+
+        img_h, img_w = image_bgr.shape[:2]
+        obstacles = self._obstacles_from_detections(
+            detections, img_w, img_h, wall_w_mm, wall_h_mm, accept_threshold
+        )
+        confidence = None
+        if detections:
+            confidence = round(float(np.mean([d.confidence for d in detections])) * 100.0, 1)
+        return {"obstacles": obstacles, "confidence": confidence, "detector": "yolo11n-onnx"}
+
     def detect_obstacles_from_image(
+        self,
+        image_bgr: np.ndarray,
+        wall_w_mm: float,
+        wall_h_mm: float,
+        sensitivity: float = 0.5
+    ) -> Tuple[List[Dict[str, Any]], Optional[float]]:
+        result = self.detect(image_bgr, wall_w_mm, wall_h_mm, sensitivity)
+        return result["obstacles"], result["confidence"]
+
+    def _obstacles_from_detections(
+        self,
+        detections: List[Any],
+        img_w: int,
+        img_h: int,
+        wall_w_mm: float,
+        wall_h_mm: float,
+        accept_threshold: float
+    ) -> List[Dict[str, Any]]:
+        obstacles: List[Dict[str, Any]] = []
+        for det in sorted(detections, key=lambda d: d.x1):
+            norm_x = det.x1 / img_w
+            norm_y = (img_h - det.y2) / img_h   # bottom-left origin
+            norm_w = (det.x2 - det.x1) / img_w
+            norm_h = (det.y2 - det.y1) / img_h
+
+            if det.confidence >= accept_threshold:
+                obs_type = det.class_name
+                base_label, depth_mm = OBSTACLE_CLASS_INFO[det.class_name]
+            else:
+                obs_type = "unverified"
+                base_label, depth_mm = UNVERIFIED_INFO
+
+            number = len(obstacles) + 1
+            obstacle = {
+                "id": f"obs_{number}",
+                "type": obs_type,
+                "label": f"{base_label} #{number}",
+                "x": round(norm_x * wall_w_mm, 1),
+                "y": round(norm_y * wall_h_mm, 1),
+                "w": round(norm_w * wall_w_mm, 1),
+                "h": round(norm_h * wall_h_mm, 1),
+                "depth_mm": depth_mm,
+                "confidence": round(det.confidence, 3),
+                "norm": {
+                    "x": round(norm_x, 4),
+                    "y": round(norm_y, 4),
+                    "w": round(norm_w, 4),
+                    "h": round(norm_h, 4)
+                }
+            }
+            if obs_type == "unverified":
+                obstacle["guess"] = det.class_name
+            obstacles.append(obstacle)
+        return obstacles
+
+    def _detect_classical(
         self,
         image_bgr: np.ndarray,
         wall_w_mm: float,
@@ -36,9 +147,9 @@ class GeometryEngine:
         sensitivity: float = 0.5
     ) -> Tuple[List[Dict[str, Any]], float]:
         """
-        Segment openings and fixtures (windows, doors, vents, electrical boxes)
-        from wall photograph using adaptive edge and contour hierarchy analysis.
-        Returns detected obstacles in wall millimeter coordinates and a confidence score.
+        Fallback used when no trained model is loaded: segment openings and fixtures
+        with adaptive edge and contour hierarchy analysis. Returns obstacles in wall
+        millimetre coordinates and a heuristic confidence score.
         """
         img_h, img_w = image_bgr.shape[:2]
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
