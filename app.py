@@ -16,6 +16,7 @@ from flask_cors import CORS
 
 from geometry_engine import GeometryEngine
 from cad_exporter import CADExporter
+from obstacle_detector import load_default_detector
 
 # Define absolute paths for static assets and templates (vital for Vercel/serverless environments)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +34,7 @@ os.makedirs(SAMPLES_DIR, exist_ok=True)
 app = Flask(__name__, static_folder=STATIC_DIR, template_folder=TEMPLATES_DIR, static_url_path="/static")
 CORS(app)
 
-geometry_engine = GeometryEngine()
+geometry_engine = GeometryEngine(detector=load_default_detector())
 cad_exporter = CADExporter()
 
 # In-memory cached active state for immediate downloads
@@ -88,15 +89,76 @@ def get_samples():
     return jsonify({"success": True, "samples": samples})
 
 
+def _sanitize_wall_params(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm):
+    return (
+        max(1000.0, min(50000.0, wall_w_mm)),
+        max(1000.0, min(30000.0, wall_h_mm)),
+        max(150.0, min(500.0, spray_width_mm)),
+        max(0.0, min(40.0, overlap_pct)),
+        max(10.0, min(300.0, safety_buffer_mm)),
+    )
+
+
+def count_unverified(obstacles):
+    return sum(1 for obs in obstacles if obs.get("type") == "unverified")
+
+
+def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles):
+    """Plan coverage, compute metrics, write every export file and refresh the session cache."""
+    waypoints, path_stats = geometry_engine.plan_coverage_path(
+        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
+    )
+    metrics = geometry_engine.compute_metrics(wall_w_mm, wall_h_mm, obstacles, path_stats)
+
+    dxf_content = cad_exporter.export_dxf(wall_w_mm, wall_h_mm, obstacles, waypoints)
+    dxf_path = os.path.join(EXPORTS_DIR, "paintpilot_wall.dxf")
+    with open(dxf_path, "w", encoding="utf-8") as f:
+        f.write(dxf_content)
+
+    obj_bundle = cad_exporter.export_obj_and_mtl(wall_w_mm, wall_h_mm, obstacles, waypoints)
+    obj_path = os.path.join(EXPORTS_DIR, "paintpilot_wall.obj")
+    mtl_path = os.path.join(EXPORTS_DIR, "paintpilot_wall.mtl")
+    with open(obj_path, "w", encoding="utf-8") as f:
+        f.write(obj_bundle["obj"])
+    with open(mtl_path, "w", encoding="utf-8") as f:
+        f.write(obj_bundle["mtl"])
+
+    # Package 3D bundle (OBJ + MTL) into a single zip archive for 1-click import
+    zip_path = os.path.join(EXPORTS_DIR, "paintpilot_wall_3d_bundle.zip")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(obj_path, arcname="paintpilot_wall.obj")
+        zf.write(mtl_path, arcname="paintpilot_wall.mtl")
+
+    mission_json = cad_exporter.export_mission_json(wall_w_mm, wall_h_mm, obstacles, waypoints, metrics)
+    json_path = os.path.join(EXPORTS_DIR, "apr_mission_manifest.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        f.write(mission_json)
+
+    motion_csv = cad_exporter.export_motion_csv(waypoints)
+    csv_path = os.path.join(EXPORTS_DIR, "apr_waypoints.csv")
+    with open(csv_path, "w", encoding="utf-8") as f:
+        f.write(motion_csv)
+
+    current_session.update({
+        "wall_w_mm": wall_w_mm,
+        "wall_h_mm": wall_h_mm,
+        "obstacles": obstacles,
+        "waypoints": waypoints,
+        "metrics": metrics,
+        "stats": path_stats,
+    })
+    return waypoints, path_stats, metrics
+
+
 @app.route("/api/analyze", methods=["POST"])
 def analyze_wall():
     """
     Core API endpoint:
-    Processes wall photo, segments paintable vs keep-out obstacle zones,
-    generates 3D CAD mesh + Boustrophedon rover toolpath, and prepares exports.
+    Detects obstacle zones in a wall photo, generates the 3D CAD mesh and Boustrophedon
+    rover toolpath, and prepares exports. Uncertain detections come back as
+    type "unverified" for the operator to review.
     """
     try:
-        # Extract physical calibration parameters
         wall_w_mm = float(request.form.get("width_mm", 4000.0))
         wall_h_mm = float(request.form.get("height_mm", 2800.0))
         spray_width_mm = float(request.form.get("spray_width_mm", 250.0))
@@ -105,12 +167,9 @@ def analyze_wall():
         sensitivity = float(request.form.get("sensitivity", 0.5))
         sample_id = request.form.get("sample_id", None)
 
-        # Sanitize parameters
-        wall_w_mm = max(1000.0, min(50000.0, wall_w_mm))
-        wall_h_mm = max(1000.0, min(30000.0, wall_h_mm))
-        spray_width_mm = max(150.0, min(500.0, spray_width_mm))
-        overlap_pct = max(0.0, min(40.0, overlap_pct))
-        safety_buffer_mm = max(10.0, min(300.0, safety_buffer_mm))
+        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm = _sanitize_wall_params(
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm
+        )
 
         # 1. Load image (from uploaded file or pre-packaged sample)
         img_bgr = None
@@ -141,58 +200,15 @@ def analyze_wall():
             img_bgr = geometry_engine.generate_benchmark_wall_image()
             source_name = "Synthetic Calibrated Wall"
 
-        # 2. Run computer vision segmentation
-        obstacles, confidence = geometry_engine.detect_obstacles_from_image(
-            img_bgr, wall_w_mm, wall_h_mm, sensitivity
-        )
+        # 2. Detect obstacles
+        detection = geometry_engine.detect(img_bgr, wall_w_mm, wall_h_mm, sensitivity)
+        obstacles = detection["obstacles"]
+        confidence = detection["confidence"]
 
-        # 3. Generate Boustrophedon coverage path
-        waypoints, path_stats = geometry_engine.plan_coverage_path(
+        # 3. Plan coverage, compute metrics, write exports
+        waypoints, path_stats, metrics = build_mission(
             wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
         )
-
-        # 4. Compute engineering metrics
-        metrics = geometry_engine.compute_metrics(
-            wall_w_mm, wall_h_mm, obstacles, path_stats
-        )
-
-        # 5. Export CAD and 3D files to disk for download
-        dxf_content = cad_exporter.export_dxf(wall_w_mm, wall_h_mm, obstacles, waypoints)
-        dxf_path = os.path.join(EXPORTS_DIR, "paintpilot_wall.dxf")
-        with open(dxf_path, "w", encoding="utf-8") as f:
-            f.write(dxf_content)
-
-        obj_bundle = cad_exporter.export_obj_and_mtl(wall_w_mm, wall_h_mm, obstacles, waypoints)
-        obj_path = os.path.join(EXPORTS_DIR, "paintpilot_wall.obj")
-        mtl_path = os.path.join(EXPORTS_DIR, "paintpilot_wall.mtl")
-        with open(obj_path, "w", encoding="utf-8") as f:
-            f.write(obj_bundle["obj"])
-        with open(mtl_path, "w", encoding="utf-8") as f:
-            f.write(obj_bundle["mtl"])
-
-        # Package 3D bundle (OBJ + MTL) into a single zip archive for 1-click import
-        zip_path = os.path.join(EXPORTS_DIR, "paintpilot_wall_3d_bundle.zip")
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(obj_path, arcname="paintpilot_wall.obj")
-            zf.write(mtl_path, arcname="paintpilot_wall.mtl")
-
-        mission_json = cad_exporter.export_mission_json(wall_w_mm, wall_h_mm, obstacles, waypoints, metrics)
-        json_path = os.path.join(EXPORTS_DIR, "apr_mission_manifest.json")
-        with open(json_path, "w", encoding="utf-8") as f:
-            f.write(mission_json)
-
-        motion_csv = cad_exporter.export_motion_csv(waypoints)
-        csv_path = os.path.join(EXPORTS_DIR, "apr_waypoints.csv")
-        with open(csv_path, "w", encoding="utf-8") as f:
-            f.write(motion_csv)
-
-        # Update cached session state
-        current_session["wall_w_mm"] = wall_w_mm
-        current_session["wall_h_mm"] = wall_h_mm
-        current_session["obstacles"] = obstacles
-        current_session["waypoints"] = waypoints
-        current_session["metrics"] = metrics
-        current_session["stats"] = path_stats
         current_session["confidence"] = confidence
 
         # Encode image to base64 for 2D canvas overlay
@@ -211,6 +227,8 @@ def analyze_wall():
         return jsonify({
             "success": True,
             "source_name": source_name,
+            "detector": detection["detector"],
+            "needs_review": count_unverified(obstacles),
             "wall": {
                 "width_mm": wall_w_mm,
                 "height_mm": wall_h_mm,
@@ -227,6 +245,8 @@ def analyze_wall():
             "timestamp": time.strftime("%H:%M:%S")
         })
 
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
     except Exception as e:
         import traceback
         traceback.print_exc()
