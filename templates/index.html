@@ -38,7 +38,7 @@
 				</p>
 			</div>
 			<div class="pipeline-steps">
-				<span class="step-node complete">1. PHOTO RECTIFY</span>
+				<span class="step-node complete">1. WALL PHOTO</span>
 				<i class="arrow">›</i>
 				<span class="step-node complete">2. OBSTACLE MASK</span>
 				<i class="arrow">›</i>
@@ -71,8 +71,13 @@
 					<div class="upload" id="dropZone">
 						<strong>＋ Upload Wall Photo</strong>
 						<span id="fileName">Drop JPG, PNG, WEBP or click to browse</span>
-						<small style="color:var(--muted);margin-top:4px;">Auto-rectification & edge segmentation</small>
+						<small style="color:var(--muted);margin-top:4px;">Shoot square-on, or mark the wall corners after upload</small>
 						<input id="fileInput" type="file" accept="image/*" />
+					</div>
+
+					<div class="corners-row" id="cornersRow" hidden>
+						<button type="button" class="pill-btn" id="cornersBtn">Mark wall corners</button>
+						<small id="cornersStatus" style="color:var(--muted);">Whole photo is treated as the wall.</small>
 					</div>
 
 					<!-- Physical Wall Dimension Inputs -->
@@ -300,7 +305,7 @@
 					</div>
 					<div class="event complete">
 						<div class="dot">✓</div>
-						<small>Edge Segment</small>
+						<small>Detect Obstacles</small>
 					</div>
 					<div class="event complete">
 						<div class="dot">✓</div>
@@ -339,6 +344,21 @@
 			WBS 1.2: Coverage Planning, Surface Segmentation & 3D Wall Geometry Subsystem • Airless Spray Arm Standoff Control
 		</footer>
 	</main>
+
+	<!-- Wall corner picker -->
+	<section class="corner-modal" id="cornerModal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cornerTitle">
+		<div class="corner-dialog">
+			<h3 id="cornerTitle">Mark the wall corners</h3>
+			<p id="cornerHint">Click the wall's top-left corner.</p>
+			<canvas id="cornerCanvas" width="900" height="600"></canvas>
+			<div class="corner-actions">
+				<button type="button" class="pill-btn" id="cornerUndoBtn">Undo last point</button>
+				<button type="button" class="pill-btn" id="cornerClearBtn">Use whole photo</button>
+				<button type="button" class="pill-btn" id="cornerCancelBtn">Cancel</button>
+				<button type="button" class="primary-btn" id="cornerApplyBtn" disabled>Apply corners</button>
+			</div>
+		</div>
+	</section>
 
 	<!-- Full-Screen Autonomous Rover Simulation Modal Deck -->
 	<section class="sim-modal-overlay" id="simModalOverlay" style="display:none;">
@@ -483,6 +503,7 @@
 	<script src="/static/OrbitControls.js"></script>
 	<script src="/static/viewer3d.js"></script>
 	<script src="/static/rover_sim.js"></script>
+	<script src="/static/corner_picker.js"></script>
 	<script src="/static/app.js"></script>
 </body>
 </html>

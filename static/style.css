@@ -1301,3 +1301,64 @@ footer strong {
 	font-size: 11px;
 	line-height: 1.5;
 }
+
+/* Wall corner picker */
+.corners-row {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-bottom: 10px;
+}
+
+.corner-modal {
+	position: fixed;
+	inset: 0;
+	z-index: 60;
+	align-items: center;
+	justify-content: center;
+	background: rgba(4, 10, 13, 0.86);
+	padding: 20px;
+}
+
+.corner-dialog {
+	background: var(--panel);
+	border: 1px solid var(--line-light);
+	border-radius: 8px;
+	padding: 18px;
+	max-width: 940px;
+	width: 100%;
+}
+
+.corner-dialog h3 {
+	margin: 0 0 4px;
+	font-size: 15px;
+}
+
+.corner-dialog p {
+	margin: 0 0 12px;
+	color: var(--cyan);
+	font-size: 12.5px;
+}
+
+.corner-dialog canvas {
+	display: block;
+	width: 100%;
+	height: auto;
+	background: var(--bg);
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	cursor: crosshair;
+}
+
+.corner-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.corner-actions .primary-btn {
+	width: auto;
+	padding: 9px 16px;
+	margin-left: auto;
+}

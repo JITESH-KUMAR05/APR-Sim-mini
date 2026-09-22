@@ -63,6 +63,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const reviewList = $('reviewList');
     const exportCaution = $('exportCaution');
 
+    // Wall corner picker
+    const cornersRow = $('cornersRow');
+    const cornersBtn = $('cornersBtn');
+    const cornersStatus = $('cornersStatus');
+    const cornerModal = $('cornerModal');
+    const cornerCanvas = $('cornerCanvas');
+    const cornerHint = $('cornerHint');
+    const cornerUndoBtn = $('cornerUndoBtn');
+    const cornerClearBtn = $('cornerClearBtn');
+    const cornerCancelBtn = $('cornerCancelBtn');
+    const cornerApplyBtn = $('cornerApplyBtn');
+
     // Overlay 3D Controls
     const resetViewBtn = $('resetViewBtn');
     const isoViewBtn = $('isoViewBtn');
@@ -79,6 +91,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedFile = null;
     let activeSampleId = 'residential';
     let loadedImage2D = null;
+    let wallCorners = null;
+    let cornerPreviewUrl = null;
     let replanInFlight = false;
 
     // Initialize 3D Viewer
@@ -116,6 +130,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sampleResidentialBtn.addEventListener('click', () => {
         selectedFile = null;
         activeSampleId = 'residential';
+        resetCorners(false);
         fileNameDisplay.textContent = 'Benchmark: Residential Exterior Facade';
         sampleResidentialBtn.classList.add('active');
         sampleCommercialBtn.classList.remove('active');
@@ -127,6 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sampleCommercialBtn.addEventListener('click', () => {
         selectedFile = null;
         activeSampleId = 'commercial';
+        resetCorners(false);
         fileNameDisplay.textContent = 'Benchmark: Commercial Building Wall';
         sampleCommercialBtn.classList.add('active');
         sampleResidentialBtn.classList.remove('active');
@@ -141,6 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.files && e.target.files[0]) {
             selectedFile = e.target.files[0];
             activeSampleId = null;
+            resetCorners(true);
             sampleResidentialBtn.classList.remove('active');
             sampleCommercialBtn.classList.remove('active');
             fileNameDisplay.textContent = selectedFile.name + ` (${(selectedFile.size / 1024).toFixed(0)} KB)`;
@@ -163,6 +180,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.dataTransfer.files && e.dataTransfer.files[0]) {
             selectedFile = e.dataTransfer.files[0];
             activeSampleId = null;
+            resetCorners(true);
             sampleResidentialBtn.classList.remove('active');
             sampleCommercialBtn.classList.remove('active');
             fileNameDisplay.textContent = selectedFile.name;
@@ -302,6 +320,69 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Wall corner picker
+    const CORNER_PROMPTS = [
+        "Click the wall's top-left corner.",
+        'Click the top-right corner.',
+        'Click the bottom-right corner.',
+        'Click the bottom-left corner.',
+        'All four corners set. Apply to straighten the photo.'
+    ];
+
+    const cornerPicker = new window.CornerPicker(cornerCanvas, updateCornerHint);
+
+    function updateCornerHint() {
+        const count = cornerPicker.points.length;
+        cornerHint.textContent = CORNER_PROMPTS[count];
+        cornerApplyBtn.disabled = count !== 4;
+    }
+
+    function updateCornersStatus() {
+        cornersStatus.textContent = wallCorners
+            ? 'Wall corners set. The photo is straightened before detection.'
+            : 'Whole photo is treated as the wall.';
+    }
+
+    function resetCorners(hasUpload) {
+        wallCorners = null;
+        cornersRow.hidden = !hasUpload;
+        updateCornersStatus();
+    }
+
+    function closeCornerModal() {
+        cornerModal.style.display = 'none';
+    }
+
+    cornersBtn.addEventListener('click', () => {
+        if (!selectedFile) return;
+        if (cornerPreviewUrl) URL.revokeObjectURL(cornerPreviewUrl);
+        cornerPreviewUrl = URL.createObjectURL(selectedFile);
+        const image = new Image();
+        image.onload = () => {
+            cornerPicker.setImage(image);
+            cornerModal.style.display = 'flex';
+        };
+        image.src = cornerPreviewUrl;
+    });
+
+    cornerUndoBtn.addEventListener('click', () => cornerPicker.undo());
+    cornerCancelBtn.addEventListener('click', closeCornerModal);
+    cornerClearBtn.addEventListener('click', () => {
+        wallCorners = null;
+        updateCornersStatus();
+        closeCornerModal();
+        runAnalysis();
+    });
+    cornerApplyBtn.addEventListener('click', () => {
+        wallCorners = cornerPicker.getCorners();
+        updateCornersStatus();
+        closeCornerModal();
+        runAnalysis();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && cornerModal.style.display !== 'none') closeCornerModal();
+    });
+
     // Core Analysis Execution
     function runAnalysis() {
         appendLog('Starting OpenCV segmentation & CAD toolpath generation...', 'info');
@@ -316,6 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (selectedFile) {
             formData.append('file', selectedFile);
+            if (wallCorners) formData.append('corners', JSON.stringify(wallCorners));
         } else if (activeSampleId) {
             formData.append('sample_id', activeSampleId);
         }
