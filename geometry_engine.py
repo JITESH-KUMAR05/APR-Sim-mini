@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import logging
 import math
+import json
 from typing import Dict, List, Tuple, Any, Optional
 
 from obstacle_detector import ObstacleDetector, thresholds_for_sensitivity
@@ -138,6 +139,55 @@ class GeometryEngine:
                 obstacle["guess"] = det.class_name
             obstacles.append(obstacle)
         return obstacles
+
+    @staticmethod
+    def parse_corners(raw: Any) -> List[Tuple[float, float]]:
+        """
+        Parse a JSON list of four [x, y] image fractions (0 to 1), ordered
+        top-left, top-right, bottom-right, bottom-left. Raises ValueError.
+        """
+        try:
+            points = [(float(x), float(y)) for x, y in json.loads(raw)]
+        except (TypeError, ValueError):
+            raise ValueError("corners must be a JSON list of four [x, y] pairs")
+        if len(points) != 4:
+            raise ValueError("corners must contain exactly four points")
+        if not all(math.isfinite(v) and 0.0 <= v <= 1.0 for point in points for v in point):
+            raise ValueError("corner coordinates must be between 0 and 1")
+
+        # Shoelace area is positive for top-left, top-right, bottom-right, bottom-left in image coordinates
+        signed_area = sum(
+            x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1])
+        ) / 2.0
+        if signed_area < 0.01:
+            raise ValueError(
+                "corners must go top-left, top-right, bottom-right, bottom-left and enclose the wall"
+            )
+        if not cv2.isContourConvex(np.float32(points).reshape(-1, 1, 2)):
+            raise ValueError("corners must form a convex four-sided shape")
+        return points
+
+    def rectify_wall(
+        self,
+        image_bgr: np.ndarray,
+        corners_norm: List[Tuple[float, float]],
+        wall_w_mm: float,
+        wall_h_mm: float,
+        max_dim: int = 1200
+    ) -> np.ndarray:
+        """Perspective-correct the photo so the marked wall fills the frame at the wall's aspect ratio."""
+        img_h, img_w = image_bgr.shape[:2]
+        src = np.float32([[x * img_w, y * img_h] for x, y in corners_norm])
+
+        aspect = wall_w_mm / wall_h_mm
+        if aspect >= 1.0:
+            out_w, out_h = max_dim, max(1, int(round(max_dim / aspect)))
+        else:
+            out_w, out_h = max(1, int(round(max_dim * aspect))), max_dim
+        dst = np.float32([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]])
+
+        matrix = cv2.getPerspectiveTransform(src, dst)
+        return cv2.warpPerspective(image_bgr, matrix, (out_w, out_h))
 
     def normalize_obstacles(self, obstacles: Any) -> List[Dict[str, Any]]:
         """

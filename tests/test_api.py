@@ -93,5 +93,40 @@ class TestReplan(unittest.TestCase):
         self.assertEqual(self.replan([{**BOX, "w": -5}])[0].status_code, 400)
 
 
+class TestAnalyzeCorners(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.client = app_module.app.test_client()
+
+    def upload(self, corners=None):
+        import io
+        import cv2
+
+        image = app_module.geometry_engine.generate_benchmark_wall_image(1000, 700)
+        _, png = cv2.imencode(".png", image)
+        data = {**FORM, "file": (io.BytesIO(png.tobytes()), "wall.png")}
+        data.pop("sample_id")
+        if corners is not None:
+            data["corners"] = corners
+        return self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
+
+    def test_corners_rectify_the_returned_image_to_the_wall_aspect(self):
+        import base64
+        import cv2
+        import numpy as np
+
+        res = self.upload("[[0.05,0.05],[0.95,0.08],[0.93,0.95],[0.07,0.92]]")
+        self.assertEqual(res.status_code, 200)
+        url = json.loads(res.data)["image_data_url"]
+        decoded = cv2.imdecode(np.frombuffer(base64.b64decode(url.split(",", 1)[1]), np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(decoded.shape[:2], (840, 1200))  # 4000 x 2800 wall at max_dim 1200
+
+    def test_bad_corners_are_a_400(self):
+        self.assertEqual(self.upload("[[0,0],[1,0]]").status_code, 400)
+
+    def test_no_corners_keeps_the_original_behaviour(self):
+        self.assertEqual(self.upload().status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

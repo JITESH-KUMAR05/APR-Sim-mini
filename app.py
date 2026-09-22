@@ -200,6 +200,12 @@ def analyze_wall():
             img_bgr = geometry_engine.generate_benchmark_wall_image()
             source_name = "Synthetic Calibrated Wall"
 
+        # 1b. Straighten the photo if the operator marked the wall corners
+        corners_raw = request.form.get("corners")
+        if corners_raw:
+            corners = geometry_engine.parse_corners(corners_raw)
+            img_bgr = geometry_engine.rectify_wall(img_bgr, corners, wall_w_mm, wall_h_mm)
+
         # 2. Detect obstacles
         detection = geometry_engine.detect(img_bgr, wall_w_mm, wall_h_mm, sensitivity)
         obstacles = detection["obstacles"]

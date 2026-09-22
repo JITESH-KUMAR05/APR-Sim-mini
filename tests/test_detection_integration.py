@@ -176,5 +176,45 @@ class TestNormalizeObstacles(unittest.TestCase):
                 self.engine.normalize_obstacles(bad)
 
 
+class TestRectification(unittest.TestCase):
+    engine = GeometryEngine()
+    VALID = "[[0.2,0.2],[0.8,0.25],[0.75,0.85],[0.25,0.8]]"
+
+    def test_parse_accepts_a_valid_quad(self):
+        points = self.engine.parse_corners(self.VALID)
+        self.assertEqual(len(points), 4)
+        self.assertEqual(points[0], (0.2, 0.2))
+
+    def test_parse_rejects_bad_corners(self):
+        for bad in (
+            "not json",
+            "[[0.1,0.1],[0.9,0.1],[0.9,0.9]]",                      # three points
+            "[[0.1,0.1],[0.9,0.1],[0.9,1.5],[0.1,0.9]]",            # out of range
+            "[[0.1,0.1],[0.1,0.9],[0.9,0.9],[0.9,0.1]]",            # wrong winding
+            "[[0.1,0.1],[0.9,0.9],[0.9,0.1],[0.1,0.9]]",            # bow-tie
+            "[[0.1,0.1],[0.11,0.1],[0.11,0.11],[0.1,0.11]]",        # too small
+            None,
+        ):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                self.engine.parse_corners(bad)
+
+    def test_rectify_straightens_a_skewed_wall(self):
+        import cv2
+
+        image = np.zeros((800, 1000, 3), dtype=np.uint8)
+        quad = np.array([[200, 160], [800, 200], [750, 680], [250, 640]], dtype=np.int32)
+        cv2.fillPoly(image, [quad], (255, 255, 255))
+        corners = [(x / 1000, y / 800) for x, y in quad]
+
+        out = self.engine.rectify_wall(image, corners, 4000.0, 2000.0)
+        self.assertEqual(out.shape, (600, 1200, 3))
+        self.assertGreater(float(out.mean()), 240.0)
+
+    def test_rectify_tall_wall_uses_max_dim_for_height(self):
+        image = np.zeros((800, 1000, 3), dtype=np.uint8)
+        out = self.engine.rectify_wall(image, self.engine.parse_corners(self.VALID), 2000.0, 4000.0)
+        self.assertEqual(out.shape, (1200, 600, 3))
+
+
 if __name__ == "__main__":
     unittest.main()
