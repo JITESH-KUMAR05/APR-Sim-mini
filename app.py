@@ -253,6 +253,38 @@ def analyze_wall():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/replan", methods=["POST"])
+def replan():
+    """Re-plan the mission after the operator confirms or dismisses uncertain obstacles."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "Expected a JSON body"}), 400
+
+    try:
+        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm = _sanitize_wall_params(
+            float(payload["width_mm"]),
+            float(payload["height_mm"]),
+            float(payload["spray_width_mm"]),
+            float(payload["overlap_pct"]),
+            float(payload["safety_buffer_mm"]),
+        )
+        obstacles = geometry_engine.normalize_obstacles(payload.get("obstacles"))
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"success": False, "error": f"Invalid request: {exc}"}), 400
+
+    waypoints, path_stats, metrics = build_mission(
+        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
+    )
+    return jsonify({
+        "success": True,
+        "obstacles": obstacles,
+        "waypoints": waypoints,
+        "stats": path_stats,
+        "metrics": metrics,
+        "needs_review": count_unverified(obstacles),
+    })
+
+
 @app.route("/api/download/<file_type>", methods=["GET"])
 def download_file(file_type):
     """Serve generated CAD and mission files for download."""

@@ -139,6 +139,54 @@ class GeometryEngine:
             obstacles.append(obstacle)
         return obstacles
 
+    def normalize_obstacles(self, obstacles: Any) -> List[Dict[str, Any]]:
+        """
+        Validate client-supplied obstacles and refresh id, label and depth from the
+        obstacle type, so the server stays the single source of truth for those.
+        Raises ValueError with a message safe to show to the operator.
+        """
+        if not isinstance(obstacles, list):
+            raise ValueError("obstacles must be a list")
+
+        cleaned: List[Dict[str, Any]] = []
+        for number, obs in enumerate(obstacles, start=1):
+            if not isinstance(obs, dict):
+                raise ValueError(f"obstacle {number} must be an object")
+            try:
+                x, y, w, h = (float(obs[key]) for key in ("x", "y", "w", "h"))
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(f"obstacle {number} needs numeric x, y, w and h")
+            if not all(math.isfinite(v) for v in (x, y, w, h)) or w <= 0 or h <= 0:
+                raise ValueError(f"obstacle {number} has an invalid size or position")
+
+            obs_type = obs.get("type", "unverified")
+            if obs_type in OBSTACLE_CLASS_INFO:
+                base_label, depth_mm = OBSTACLE_CLASS_INFO[obs_type]
+            elif obs_type in LEGACY_OBSTACLE_INFO:
+                base_label, depth_mm = LEGACY_OBSTACLE_INFO[obs_type]
+            elif obs_type == "unverified":
+                base_label, depth_mm = UNVERIFIED_INFO
+            else:
+                raise ValueError(f"obstacle {number} has unknown type '{obs_type}'")
+
+            cleaned_obs = {
+                "id": f"obs_{number}",
+                "type": obs_type,
+                "label": f"{base_label} #{number}",
+                "x": round(x, 1),
+                "y": round(y, 1),
+                "w": round(w, 1),
+                "h": round(h, 1),
+                "depth_mm": depth_mm,
+            }
+            for optional in ("confidence", "norm"):
+                if optional in obs:
+                    cleaned_obs[optional] = obs[optional]
+            if obs_type == "unverified" and obs.get("guess") in OBSTACLE_CLASS_INFO:
+                cleaned_obs["guess"] = obs["guess"]
+            cleaned.append(cleaned_obs)
+        return cleaned
+
     def _detect_classical(
         self,
         image_bgr: np.ndarray,

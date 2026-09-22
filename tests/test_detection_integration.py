@@ -140,5 +140,41 @@ class TestRealModel(unittest.TestCase):
             self.assertLessEqual(obs["y"] + obs["h"], 2800.0 + 1.0)
 
 
+class TestNormalizeObstacles(unittest.TestCase):
+    engine = GeometryEngine()
+
+    def box(self, **overrides):
+        base = {"type": "unverified", "x": 100, "y": 200, "w": 300, "h": 400}
+        base.update(overrides)
+        return base
+
+    def test_confirmed_class_refreshes_label_depth_and_id(self):
+        result = self.engine.normalize_obstacles([self.box(type="ac_unit", label="stale", depth_mm=1)])
+        self.assertEqual(result[0]["id"], "obs_1")
+        self.assertEqual(result[0]["label"], "AC Unit #1")
+        self.assertEqual(result[0]["depth_mm"], 400.0)
+
+    def test_unverified_keeps_guess(self):
+        result = self.engine.normalize_obstacles([self.box(guess="pipe")])
+        self.assertEqual(result[0]["type"], "unverified")
+        self.assertEqual(result[0]["guess"], "pipe")
+
+    def test_legacy_types_are_accepted(self):
+        self.assertEqual(self.engine.normalize_obstacles([self.box(type="switchboard")])[0]["depth_mm"], 35.0)
+
+    def test_rejects_bad_input(self):
+        for bad in (
+            "nope",
+            [5],
+            [{"type": "window", "x": 1, "y": 1, "w": 10}],
+            [self.box(w=-5)],
+            [self.box(w="abc")],
+            [self.box(type="spaceship")],
+            [self.box(x=float("nan"))],
+        ):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                self.engine.normalize_obstacles(bad)
+
+
 if __name__ == "__main__":
     unittest.main()
