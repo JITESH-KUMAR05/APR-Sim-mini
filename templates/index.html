@@ -247,9 +247,20 @@
 					<div class="bar"><div id="confidenceBar" style="width:94%;"></div></div>
 				</div>
 
-				<!-- Multi-Format CAD & Robotics Mission Exports -->
+				<div class="detector-banner" id="detectorBanner" hidden>
+						Trained model not loaded. Using basic edge detection, which is less reliable on real walls.
+					</div>
+
+					<div class="review-panel" id="reviewPanel" hidden>
+						<div class="k">Obstacles to review <b id="reviewCount">0</b></div>
+						<p class="review-hint">The detector was unsure about these. Paint keeps clear of them until you confirm a class or dismiss them.</p>
+						<div id="reviewList"></div>
+					</div>
+
+					<!-- Multi-Format CAD & Robotics Mission Exports -->
 				<div class="exports">
 					<div class="k" style="margin-bottom:2px;">ENGINEERING EXPORTS</div>
+						<div class="export-caution" id="exportCaution" hidden></div>
 					<div class="export-grid">
 						<button type="button" class="export-btn primary-export" data-export="dxf">
 							↓ AutoCAD DXF (Layers)

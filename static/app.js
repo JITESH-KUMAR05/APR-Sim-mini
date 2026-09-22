@@ -57,6 +57,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const confidenceValue = $('confidenceValue');
     const confidenceBar = $('confidenceBar');
     const activeObstacleCount = $('activeObstacleCount');
+    const detectorBanner = $('detectorBanner');
+    const reviewPanel = $('reviewPanel');
+    const reviewCount = $('reviewCount');
+    const reviewList = $('reviewList');
+    const exportCaution = $('exportCaution');
 
     // Overlay 3D Controls
     const resetViewBtn = $('resetViewBtn');
@@ -335,18 +340,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             currentData = data;
-            updateMetrics(data);
-            updateTelemetry(data);
-
-            // Update 3D Viewer
-            if (viewer3D) {
-                viewer3D.loadWallData(data);
-            }
-
-            // Update Autonomous Simulation Engine
-            if (roverSim) {
-                roverSim.init(data);
-            }
+            refreshViews(data);
 
             // Pre-load image for 2D Canvas
             if (data.image_data_url) {
@@ -364,7 +358,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 render2DCanvas();
             }
 
-            appendLog(`Model generated: ${data.obstacles.length} keep-out zones detected, ${data.waypoints.length} waypoints planned`, 'success');
+            const reviewNote = data.needs_review ? `, ${data.needs_review} need review` : '';
+            appendLog(`Model generated: ${data.obstacles.length} keep-out zones detected${reviewNote}, ${data.waypoints.length} waypoints planned`, 'success');
             appendLog(`AutoCAD DXF & Wavefront 3D OBJ ready for export (DFT: ${data.metrics.target_dft_um} µm)`, 'info');
         })
         .catch((err) => {
@@ -387,8 +382,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cycleTimeValue) cycleTimeValue.textContent = metrics.cycle_time_formatted;
         if (throughputValue) throughputValue.textContent = `${metrics.throughput_m2_per_hr} m²/h`;
 
-        confidenceValue.textContent = `${confidence}%`;
-        confidenceBar.style.width = `${Math.min(100, Math.max(10, confidence))}%`;
+        const hasConfidence = confidence !== null && confidence !== undefined;
+        confidenceValue.textContent = hasConfidence ? `${confidence}%` : 'n/a';
+        confidenceBar.style.width = hasConfidence ? `${Math.min(100, Math.max(10, confidence))}%` : '0%';
 
         if (activeObstacleCount) {
             activeObstacleCount.textContent = `${obstacles.length} zones`;
@@ -425,6 +421,121 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             tbody.appendChild(tr);
         });
+    }
+
+    function refreshViews(data) {
+        updateMetrics(data);
+        updateTelemetry(data);
+        updateReviewUI(data);
+        if (viewer3D) viewer3D.loadWallData(data);
+        if (roverSim) roverSim.init(data);
+    }
+
+    const CLASS_OPTIONS = [
+        ['window', 'Window'],
+        ['door', 'Door'],
+        ['ac_unit', 'AC unit'],
+        ['meter_panel', 'Meter panel'],
+        ['pipe', 'Pipe'],
+        ['grill', 'Grill']
+    ];
+
+    function updateReviewUI(data) {
+        const pending = data.obstacles.filter((obs) => obs.type === 'unverified');
+
+        detectorBanner.hidden = data.detector !== 'classical-fallback';
+        reviewPanel.hidden = pending.length === 0;
+        exportCaution.hidden = pending.length === 0;
+        reviewCount.textContent = pending.length;
+        exportCaution.textContent =
+            `${pending.length} obstacle${pending.length === 1 ? '' : 's'} not reviewed. ` +
+            'The plan keeps clear of them, so exports are safe to use but may leave paintable wall unpainted.';
+
+        reviewList.innerHTML = '';
+        pending.forEach((obs) => {
+            const row = document.createElement('div');
+            row.className = 'review-row';
+
+            const info = document.createElement('div');
+            info.className = 'review-info';
+            const pct = Math.round((obs.confidence || 0) * 100);
+            info.textContent = obs.label + ' ';
+            const meta = document.createElement('span');
+            meta.textContent = `${pct}% sure, ${obs.w}×${obs.h} mm`;
+            info.appendChild(meta);
+
+            const select = document.createElement('select');
+            select.className = 'review-select';
+            select.setAttribute('aria-label', `Class for ${obs.label}`);
+            CLASS_OPTIONS.forEach(([value, text]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = text;
+                if (value === obs.guess) option.selected = true;
+                select.appendChild(option);
+            });
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.type = 'button';
+            confirmBtn.className = 'export-btn';
+            confirmBtn.textContent = 'Confirm';
+            confirmBtn.addEventListener('click', () => resolveObstacle(obs.id, select.value));
+
+            const dismissBtn = document.createElement('button');
+            dismissBtn.type = 'button';
+            dismissBtn.className = 'export-btn';
+            dismissBtn.textContent = 'Dismiss';
+            dismissBtn.addEventListener('click', () => resolveObstacle(obs.id, null));
+
+            const actions = document.createElement('div');
+            actions.className = 'review-actions';
+            actions.append(select, confirmBtn, dismissBtn);
+
+            row.append(info, actions);
+            reviewList.appendChild(row);
+        });
+    }
+
+    function resolveObstacle(id, newType) {
+        if (!currentData) return;
+        const obstacles = currentData.obstacles
+            .map((obs) => (obs.id === id ? (newType ? { ...obs, type: newType } : null) : obs))
+            .filter(Boolean);
+        replan(obstacles);
+    }
+
+    function replan(obstacles) {
+        const wall = currentData.wall;
+        appendLog('Re-planning mission with reviewed obstacles...', 'info');
+
+        fetch('/api/replan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                width_mm: wall.width_mm,
+                height_mm: wall.height_mm,
+                spray_width_mm: wall.spray_width_mm,
+                overlap_pct: wall.overlap_pct,
+                safety_buffer_mm: wall.safety_buffer_mm,
+                obstacles
+            })
+        })
+        .then((res) => res.json().then((body) => ({ ok: res.ok, body })))
+        .then(({ ok, body }) => {
+            if (!ok || !body.success) throw new Error(body.error || 'Re-plan failed');
+            currentData = {
+                ...currentData,
+                obstacles: body.obstacles,
+                waypoints: body.waypoints,
+                stats: body.stats,
+                metrics: body.metrics,
+                needs_review: body.needs_review
+            };
+            refreshViews(currentData);
+            render2DCanvas();
+            appendLog(`Mission re-planned: ${body.obstacles.length} keep-out zones, ${body.waypoints.length} waypoints`, 'success');
+        })
+        .catch((err) => appendLog(`Re-plan error: ${err.message}`, 'warn'));
     }
 
     // 2D High-Resolution Canvas Rendering
@@ -474,13 +585,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const ow = obs.w * scaleX;
             const oh = obs.h * scaleY;
 
-            // Obstacle fill & border (Red/Coral)
-            ctx2d.fillStyle = 'rgba(250, 116, 110, 0.25)';
+            // Obstacle fill & border: red for confirmed classes, dashed amber while unverified
+            const unverified = obs.type === 'unverified';
+            ctx2d.fillStyle = unverified ? 'rgba(244, 184, 96, 0.22)' : 'rgba(250, 116, 110, 0.25)';
             ctx2d.fillRect(ox, oy, ow, oh);
 
-            ctx2d.strokeStyle = '#fa746e';
+            ctx2d.save();
+            if (unverified) ctx2d.setLineDash([6, 4]);
+            ctx2d.strokeStyle = unverified ? '#f4b860' : '#fa746e';
             ctx2d.lineWidth = 2;
             ctx2d.strokeRect(ox, oy, ow, oh);
+            ctx2d.restore();
 
             // Safety standoff buffer outline (Dashed Yellow/Orange)
             const bufMm = wall.safety_buffer_mm || 60;
@@ -496,7 +611,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ctx2d.restore();
 
             // Label
-            ctx2d.fillStyle = '#fa746e';
+            ctx2d.fillStyle = unverified ? '#f4b860' : '#fa746e';
             ctx2d.font = '10px "DM Mono", monospace';
             ctx2d.fillText(obs.label, ox + 6, oy + 16);
             ctx2d.fillStyle = '#a1b6b9';

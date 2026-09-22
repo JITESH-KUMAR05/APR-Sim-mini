@@ -1221,3 +1221,83 @@ footer strong {
 .sim-log-line.success {
 	color: var(--green);
 }
+
+/* Detector status and obstacle review */
+[hidden] {
+	display: none !important;
+}
+
+.detector-banner {
+	margin: 0 16px 12px;
+	padding: 10px 12px;
+	border: 1px solid #684f22;
+	border-radius: 5px;
+	background: #2a2110;
+	color: var(--amber);
+	font-size: 11.5px;
+	line-height: 1.5;
+}
+
+.review-panel {
+	padding: 14px 16px;
+	border-top: 1px solid var(--line);
+}
+
+.review-panel .k {
+	color: var(--muted);
+	font: 10px 'DM Mono', monospace;
+	text-transform: uppercase;
+	letter-spacing: 0.8px;
+}
+
+.review-panel .k b {
+	float: right;
+	color: var(--amber);
+}
+
+.review-hint {
+	margin: 8px 0 10px;
+	color: var(--muted);
+	font-size: 11.5px;
+	line-height: 1.5;
+}
+
+.review-row {
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	padding: 8px 10px;
+	margin-bottom: 8px;
+	background: #0e2027;
+}
+
+.review-info {
+	font: 11px 'DM Mono', monospace;
+	color: var(--text);
+	margin-bottom: 6px;
+}
+
+.review-info span {
+	color: var(--muted);
+}
+
+.review-actions {
+	display: flex;
+	gap: 6px;
+}
+
+.review-select {
+	flex: 1;
+	min-width: 0;
+	background: #071016;
+	color: var(--text);
+	border: 1px solid var(--line-light);
+	border-radius: 4px;
+	padding: 5px 6px;
+	font: 11px 'DM Mono', monospace;
+}
+
+.export-caution {
+	color: var(--amber);
+	font-size: 11px;
+	line-height: 1.5;
+}
