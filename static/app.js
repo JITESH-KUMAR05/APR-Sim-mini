@@ -79,6 +79,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedFile = null;
     let activeSampleId = 'residential';
     let loadedImage2D = null;
+    let replanInFlight = false;
 
     // Initialize 3D Viewer
     try {
@@ -498,6 +499,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function resolveObstacle(id, newType) {
         if (!currentData) return;
+        if (replanInFlight) return;
         const obstacles = currentData.obstacles
             .map((obs) => (obs.id === id ? (newType ? { ...obs, type: newType } : null) : obs))
             .filter(Boolean);
@@ -507,6 +509,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function replan(obstacles) {
         const wall = currentData.wall;
         appendLog('Re-planning mission with reviewed obstacles...', 'info');
+        replanInFlight = true;
+        reviewList.querySelectorAll('button, select').forEach((el) => { el.disabled = true; });
 
         fetch('/api/replan', {
             method: 'POST',
@@ -534,8 +538,13 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshViews(currentData);
             render2DCanvas();
             appendLog(`Mission re-planned: ${body.obstacles.length} keep-out zones, ${body.waypoints.length} waypoints`, 'success');
+            replanInFlight = false;
         })
-        .catch((err) => appendLog(`Re-plan error: ${err.message}`, 'warn'));
+        .catch((err) => {
+            appendLog(`Re-plan error: ${err.message}`, 'warn');
+            replanInFlight = false;
+            reviewList.querySelectorAll('button, select').forEach((el) => { el.disabled = false; });
+        });
     }
 
     // 2D High-Resolution Canvas Rendering
