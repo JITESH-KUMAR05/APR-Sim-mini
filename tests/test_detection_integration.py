@@ -1,3 +1,5 @@
+import json
+import math
 import os
 import sys
 import unittest
@@ -117,13 +119,23 @@ class TestPlannerAvoidsEveryKeptBox(unittest.TestCase):
 
         buffer_mm = 60.0
         waypoints, _ = engine.plan_coverage_path(WALL_W, WALL_H, 250.0, 12.0, buffer_mm, obstacles)
+        rows_aligned_with_a_keepout = 0
         for start, end in spray_segments(waypoints):
             for obs in obstacles:
                 box_x1, box_x2 = max(0.0, obs["x"] - buffer_mm), min(WALL_W, obs["x"] + obs["w"] + buffer_mm)
                 box_y1, box_y2 = max(0.0, obs["y"] - buffer_mm), min(WALL_H, obs["y"] + obs["h"] + buffer_mm)
                 if box_y1 <= start["y"] <= box_y2:
+                    rows_aligned_with_a_keepout += 1
                     low, high = sorted((start["x"], end["x"]))
                     self.assertFalse(low < box_x2 - 0.5 and high > box_x1 + 0.5, f"pass crosses {obs['id']}")
+
+        # Vacuity guard: this test only proves anything if at least one spray row's y-range
+        # actually overlapped a keep-out box during the run above -- otherwise the crossing
+        # assertion never fired and the test would trivially pass even with no avoidance at all.
+        self.assertGreater(
+            rows_aligned_with_a_keepout, 0,
+            "no spray row ever aligned with a keep-out box; the avoidance check above never ran"
+        )
 
 
 @unittest.skipUnless(load_default_detector() is not None, "models/apr_obstacles.onnx not present")
@@ -162,6 +174,35 @@ class TestNormalizeObstacles(unittest.TestCase):
     def test_legacy_types_are_accepted(self):
         self.assertEqual(self.engine.normalize_obstacles([self.box(type="switchboard")])[0]["depth_mm"], 35.0)
 
+    def test_out_of_range_coordinates_are_clamped_to_the_wall_not_rejected(self):
+        huge = self.box(x=1e308, y=-1e308, w=1e308, h=1e308)
+        result = self.engine.normalize_obstacles([huge], wall_w_mm=4000.0, wall_h_mm=2800.0)
+        obstacle = result[0]
+        self.assertEqual(obstacle["x"], 4000.0)
+        self.assertEqual(obstacle["y"], 0.0)
+        self.assertEqual(obstacle["w"], 4000.0)
+        self.assertEqual(obstacle["h"], 2800.0)
+        for value in (obstacle["x"], obstacle["y"], obstacle["w"], obstacle["h"]):
+            self.assertTrue(math.isfinite(value))
+
+    def test_clamped_values_never_produce_non_finite_json(self):
+        import json as json_module
+
+        huge = self.box(x=1e308, w=1e308)
+        result = self.engine.normalize_obstacles([huge], wall_w_mm=4000.0, wall_h_mm=2800.0)
+        # allow_nan defaults to True in json.dumps, so this only proves the value is finite
+        self.assertTrue(math.isfinite(result[0]["x"]))
+        dumped = json_module.dumps(result, allow_nan=False)
+        self.assertNotIn("Infinity", dumped)
+
+    def test_too_many_obstacles_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.engine.normalize_obstacles([self.box() for _ in range(201)])
+
+    def test_norm_field_is_dropped_not_passed_through(self):
+        result = self.engine.normalize_obstacles([self.box(norm={"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1})])
+        self.assertNotIn("norm", result[0])
+
     def test_rejects_bad_input(self):
         for bad in (
             "nope",
@@ -197,6 +238,22 @@ class TestRectification(unittest.TestCase):
         ):
             with self.assertRaises(ValueError, msg=str(bad)):
                 self.engine.parse_corners(bad)
+
+    def test_parse_rejects_a_concave_quad_specifically_via_the_convexity_check(self):
+        # A "dart" shape: correct winding (positive shoelace area, well past the 0.01
+        # threshold) so it clears the area/winding check, but the last point is pulled in
+        # toward the center, making vertex D reflex (non-convex). This must be caught by
+        # the cv2.isContourConvex check specifically, not the earlier area/winding checks
+        # -- unlike the pre-existing "bow-tie" fixture, which fails winding first.
+        concave = "[[0.0,0.0],[1.0,0.5],[0.0,1.0],[0.25,0.5]]"
+        points = [(float(x), float(y)) for x, y in json.loads(concave)]
+        signed_area = sum(
+            x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1])
+        ) / 2.0
+        self.assertGreaterEqual(signed_area, 0.01)  # sanity: clears the area/winding gate
+        with self.assertRaises(ValueError) as ctx:
+            self.engine.parse_corners(concave)
+        self.assertIn("convex", str(ctx.exception))
 
     def test_rectify_straightens_a_skewed_wall(self):
         import cv2

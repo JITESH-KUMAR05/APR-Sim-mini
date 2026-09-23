@@ -32,6 +32,7 @@ os.makedirs(EXPORTS_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder=STATIC_DIR, template_folder=TEMPLATES_DIR, static_url_path="/static")
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB cap on uploads
 CORS(app)
 
 geometry_engine = GeometryEngine(detector=load_default_detector())
@@ -274,21 +275,26 @@ def replan():
             float(payload["overlap_pct"]),
             float(payload["safety_buffer_mm"]),
         )
-        obstacles = geometry_engine.normalize_obstacles(payload.get("obstacles"))
+        obstacles = geometry_engine.normalize_obstacles(payload.get("obstacles"), wall_w_mm, wall_h_mm)
+
+        waypoints, path_stats, metrics = build_mission(
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
+        )
+        return jsonify({
+            "success": True,
+            "obstacles": obstacles,
+            "waypoints": waypoints,
+            "stats": path_stats,
+            "metrics": metrics,
+            "needs_review": count_unverified(obstacles),
+        })
+
     except (KeyError, TypeError, ValueError) as exc:
         return jsonify({"success": False, "error": f"Invalid request: {exc}"}), 400
-
-    waypoints, path_stats, metrics = build_mission(
-        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
-    )
-    return jsonify({
-        "success": True,
-        "obstacles": obstacles,
-        "waypoints": waypoints,
-        "stats": path_stats,
-        "metrics": metrics,
-        "needs_review": count_unverified(obstacles),
-    })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/download/<file_type>", methods=["GET"])

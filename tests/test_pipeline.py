@@ -215,10 +215,18 @@ class TestPaintPilotPipeline(unittest.TestCase):
             {"seq": 2, "x": 4000, "y": 125, "z": 250, "spray_active": True, "row": 1},
         ]
         for obstacle_type in ("meter_panel", "ac_unit", "pipe", "grill", "unverified"):
-            obstacles = [{"id": "obs_1", "type": obstacle_type, "x": 500, "y": 500, "w": 500, "h": 500, "depth_mm": 100}]
-            bundle = self.exporter.export_obj_and_mtl(4000.0, 2800.0, obstacles, waypoints)
-            self.assertIn("f ", bundle["obj"], obstacle_type)
-            self.assertIn("NO_PAINT_OBSTACLES", self.exporter.export_dxf(4000.0, 2800.0, obstacles, waypoints))
+            with self.subTest(obstacle_type=obstacle_type):
+                obstacles = [{"id": "obs_1", "type": obstacle_type, "x": 500, "y": 500, "w": 500, "h": 500, "depth_mm": 100}]
+                bundle = self.exporter.export_obj_and_mtl(4000.0, 2800.0, obstacles, waypoints)
+                self.assertIn("f ", bundle["obj"], obstacle_type)
+                self.assertIn("NO_PAINT_OBSTACLES", self.exporter.export_dxf(4000.0, 2800.0, obstacles, waypoints))
+
+                # Only meter_panel is an electrical fixture; the other new classes (and
+                # unverified) must not pick up its material by falling through a default.
+                if obstacle_type == "meter_panel":
+                    self.assertIn("usemtl Electrical_Fixture_Material", bundle["obj"])
+                else:
+                    self.assertNotIn("usemtl Electrical_Fixture_Material", bundle["obj"])
 
         meter = [{"id": "obs_1", "type": "meter_panel", "x": 500, "y": 500, "w": 500, "h": 500, "depth_mm": 100}]
         obj = self.exporter.export_obj_and_mtl(4000.0, 2800.0, meter, waypoints)["obj"]

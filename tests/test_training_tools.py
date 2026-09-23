@@ -45,6 +45,15 @@ class TestRemapLabelLines(unittest.TestCase):
     def test_unmapped_out_of_range_blank_and_malformed_lines_are_dropped(self):
         self.assertEqual(self.remap(["2 0.5 0.5 0.2 0.2", "9 0.5 0.5 0.2 0.2", "", "0 0.5 0.5 0.2"]), [])
 
+    def test_negative_class_id_is_dropped_not_wrapped(self):
+        # source_names[-1] ("wall") IS mapped here, so this specifically exercises Python's
+        # negative-index wraparound: without an explicit "class_id >= 0" check, int("-1")
+        # would silently resolve to "wall" -> "window" instead of being treated as an
+        # out-of-range index (like "9" in the test above) and dropped.
+        names = ["door", "window", "wall"]
+        mapping = {"door": "door", "window": "window", "wall": "window"}
+        self.assertEqual(remap_label_lines(["-1 0.5 0.5 0.2 0.2"], names, mapping, CLASS_NAMES), [])
+
     def test_oriented_box_becomes_its_axis_aligned_envelope(self):
         self.assertEqual(
             self.remap(["0 0.1 0.2 0.3 0.2 0.3 0.4 0.1 0.4"]),

@@ -92,6 +92,38 @@ class TestReplan(unittest.TestCase):
         self.assertEqual(self.replan([{**BOX, "type": "spaceship"}])[0].status_code, 400)
         self.assertEqual(self.replan([{**BOX, "w": -5}])[0].status_code, 400)
 
+    def test_analyze_then_replan_round_trip_preserves_obstacle_geometry(self):
+        """The exact obstacles array /api/analyze returns must be accepted verbatim by
+        /api/replan, with obstacle mm geometry preserved between the two responses."""
+        detector = FakeDetector([
+            Detection("window", 0.9, 100, 100, 400, 400),     # confident -> accepted
+            Detection("ac_unit", 0.35, 600, 100, 900, 400),   # below accept threshold -> unverified
+        ])
+        with mock.patch.object(app_module.geometry_engine, "detector", detector):
+            analyze_res = self.client.post("/api/analyze", data=FORM)
+        self.assertEqual(analyze_res.status_code, 200)
+        analyze_data = json.loads(analyze_res.data)
+        self.assertTrue(analyze_data["success"])
+
+        obstacles = analyze_data["obstacles"]
+        self.assertEqual(len(obstacles), 2)
+        self.assertEqual({o["type"] for o in obstacles}, {"window", "unverified"})
+
+        # Take the analyze response's obstacles array verbatim and replan with it.
+        replan_res, replan_data = self.replan(obstacles)
+        self.assertEqual(replan_res.status_code, 200)
+        self.assertTrue(replan_data["success"])
+
+        analyze_by_id = {o["id"]: o for o in obstacles}
+        self.assertEqual(len(replan_data["obstacles"]), len(obstacles))
+        for obs in replan_data["obstacles"]:
+            original = analyze_by_id[obs["id"]]
+            self.assertEqual(obs["type"], original["type"])
+            self.assertEqual(obs["x"], original["x"])
+            self.assertEqual(obs["y"], original["y"])
+            self.assertEqual(obs["w"], original["w"])
+            self.assertEqual(obs["h"], original["h"])
+
 
 class TestAnalyzeCorners(unittest.TestCase):
     @classmethod

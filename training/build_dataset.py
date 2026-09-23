@@ -8,7 +8,9 @@ Layout expected under --sources:
 Source classes not listed are dropped; sources missing from the map are skipped.
 
 Split rule: the source named --heldout (default "team") keeps its test split as the merged
-test set. Every other split of every source feeds train or val. Held-out photos never train.
+test set. Every other split of every source feeds train or val. Only the held-out source's
+test split is protected from training -- its train/valid splits feed training/val like any
+other source.
 """
 
 import argparse
@@ -66,7 +68,13 @@ def remap_label_lines(
         if not parts:
             continue
         try:
-            target = mapping.get(source_names[int(parts[0])])
+            class_id = int(parts[0])
+            # A negative class id (e.g. "-1") is out of range and must be dropped like any
+            # other bad index -- without this check, Python's negative-index semantics would
+            # silently wrap it into source_names instead of raising IndexError.
+            if class_id < 0:
+                continue
+            target = mapping.get(source_names[class_id])
             coords = [float(v) for v in parts[1:]]
         except (IndexError, ValueError):
             continue

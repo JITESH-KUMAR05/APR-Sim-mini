@@ -1,0 +1,11 @@
+# Keep the deployed bundle small: exclude training assets, docs and large
+# reference documents that the running app never reads at request time.
+# Do NOT list models/, static/ or templates/ here -- the app needs them.
+# samples/ is deliberately NOT listed: app.py reads from it at request time
+# (the "residential"/"commercial" preset samples in /api/analyze).
+training/
+docs/
+tests/
+*.pdf
+*.pptx
+*.docx

@@ -23,10 +23,21 @@ class TestDependencyPins(unittest.TestCase):
         self.assertEqual(sorted(map(_normalise, requirements)), sorted(map(_normalise, declared)))
 
     def test_no_training_frameworks_in_runtime_dependencies(self):
-        with open(os.path.join(ROOT, "requirements.txt"), encoding="utf-8") as handle:
-            text = handle.read().lower()
-        for banned in ("torch", "ultralytics"):
-            self.assertIsNone(re.search(rf"^{banned}\b", text, re.M), f"{banned} must not be a runtime dependency")
+        # Scan both files that declare runtime deps. Lines in pyproject.toml are indented
+        # and quoted ('    "torch==...",'), unlike requirements.txt's bare 'torch==...', so
+        # the pattern allows optional leading whitespace/quote. `[a-z]*` after the banned
+        # name (rather than a trailing \b right after it) also catches variants like
+        # "torchvision", which `^torch\b` misses -- there is no word boundary between
+        # "torch" and "vision" since both are word characters.
+        for filename in ("requirements.txt", "pyproject.toml"):
+            with open(os.path.join(ROOT, filename), encoding="utf-8") as handle:
+                text = handle.read().lower()
+            for banned in ("torch", "ultralytics"):
+                self.assertIsNone(
+                    re.search(rf'^\s*"?{banned}[a-z]*\b', text, re.M),
+                    f"{banned} (or a variant such as {banned}vision) must not be a runtime "
+                    f"dependency in {filename}",
+                )
 
 
 if __name__ == "__main__":

@@ -329,9 +329,23 @@ document.addEventListener('DOMContentLoaded', () => {
         'All four corners set. Apply to straighten the photo.'
     ];
 
-    const cornerPicker = new window.CornerPicker(cornerCanvas, updateCornerHint);
+    // Guarded the same way the 3D viewer is initialized above: a load failure here must
+    // not throw out of the top-level script body and break the const declarations (like
+    // CLASS_OPTIONS) that run later in this same file.
+    let cornerPicker = null;
+    try {
+        if (window.CornerPicker) {
+            cornerPicker = new window.CornerPicker(cornerCanvas, updateCornerHint);
+        } else {
+            appendLog('Warning: corner picker script loading...', 'warn');
+        }
+    } catch (e) {
+        console.error('Error initializing CornerPicker:', e);
+        appendLog('Corner picker fallback enabled', 'warn');
+    }
 
     function updateCornerHint() {
+        if (!cornerPicker) return;
         const count = cornerPicker.points.length;
         cornerHint.textContent = CORNER_PROMPTS[count];
         cornerApplyBtn.disabled = count !== 4;
@@ -354,7 +368,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     cornersBtn.addEventListener('click', () => {
-        if (!selectedFile) return;
+        if (!selectedFile || !cornerPicker) return;
         if (cornerPreviewUrl) URL.revokeObjectURL(cornerPreviewUrl);
         cornerPreviewUrl = URL.createObjectURL(selectedFile);
         const image = new Image();
@@ -365,7 +379,7 @@ document.addEventListener('DOMContentLoaded', () => {
         image.src = cornerPreviewUrl;
     });
 
-    cornerUndoBtn.addEventListener('click', () => cornerPicker.undo());
+    cornerUndoBtn.addEventListener('click', () => cornerPicker && cornerPicker.undo());
     cornerCancelBtn.addEventListener('click', closeCornerModal);
     cornerClearBtn.addEventListener('click', () => {
         wallCorners = null;
@@ -374,7 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
         runAnalysis();
     });
     cornerApplyBtn.addEventListener('click', () => {
-        wallCorners = cornerPicker.getCorners();
+        wallCorners = cornerPicker ? cornerPicker.getCorners() : null;
         updateCornersStatus();
         closeCornerModal();
         runAnalysis();
@@ -385,7 +399,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Core Analysis Execution
     function runAnalysis() {
-        appendLog('Starting OpenCV segmentation & CAD toolpath generation...', 'info');
+        appendLog('Starting obstacle detection & CAD toolpath generation...', 'info');
 
         const formData = new FormData();
         formData.append('width_mm', widthInput.value);
@@ -419,6 +433,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!data.success) {
                 appendLog(`Error: ${data.error}`, 'warn');
+                // Self-heal: if the server rejected the request (e.g. bad corners), don't
+                // keep sending the same broken corners on every retry -- fall back to
+                // "whole photo" until the operator re-marks them.
+                wallCorners = null;
+                updateCornersStatus();
                 return;
             }
 
@@ -450,6 +469,11 @@ document.addEventListener('DOMContentLoaded', () => {
             generateBtn.innerHTML = 'Generate Wall Map & CAD &nbsp;→';
             console.error('Analysis error:', err);
             appendLog(`Execution error: ${err.message}`, 'warn');
+            // Self-heal: a rejected request (e.g. the server rejected the marked corners,
+            // which surfaces here as a non-OK HTTP status) must not leave wallCorners set,
+            // or every subsequent attempt keeps failing the same way.
+            wallCorners = null;
+            updateCornersStatus();
         });
     }
 

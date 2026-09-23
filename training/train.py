@@ -48,7 +48,10 @@ def main() -> None:
     for class_index, ap50 in zip(metrics.box.ap_class_index, metrics.box.ap50):
         print(f"  {CLASS_NAMES[int(class_index)]}: {ap50:.3f}")
 
-    onnx_path = Path(tuned.export(format="onnx", imgsz=args.imgsz, simplify=True))
+    # nms=False is explicit (not just relying on Ultralytics' current default): NMS runs in
+    # our own code (obstacle_detector.py), not baked into the export, so a future Ultralytics
+    # default change can't silently change what the exported model returns.
+    onnx_path = Path(tuned.export(format="onnx", imgsz=args.imgsz, simplify=True, nms=False))
     target = ROOT / "models" / "apr_obstacles.onnx"
     target.parent.mkdir(exist_ok=True)
     shutil.copyfile(onnx_path, target)

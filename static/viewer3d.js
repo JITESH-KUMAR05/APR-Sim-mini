@@ -245,8 +245,10 @@ class WallViewer3D {
                 frameLine.position.set(ox, oy, 0.008);
                 this.obstacleGroup.add(frameLine);
 
-            } else if (obs.type === 'switchboard' || obs.type === 'meter_panel') {
-                // Extruded fixture
+            } else if (['switchboard', 'meter_panel', 'ac_unit', 'pipe', 'grill', 'unverified'].includes(obs.type)) {
+                // Extruded fixture: protrudes from the wall face (positive z), matching the
+                // obstacle contract's nonzero depth_mm for every one of these types -- none
+                // of them are a recess into the wall the way a window or door opening is.
                 const fixGeom = new THREE.BoxGeometry(ow, oh, 0.04);
                 const fixMat = new THREE.MeshStandardMaterial({
                     color: 0xf4b860,

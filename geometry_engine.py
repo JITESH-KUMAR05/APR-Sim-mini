@@ -33,6 +33,8 @@ LEGACY_OBSTACLE_INFO = {  # types still emitted by the classical fallback
 
 
 class GeometryEngine:
+    MAX_OBSTACLES = 200  # request-size guard for client-submitted obstacle lists (/api/replan)
+
     def __init__(self, detector: Optional[ObstacleDetector] = None):
         self.detector = detector
         # Default physical parameters mapped to APR Design Review (WBS 1.2 §3)
@@ -69,7 +71,7 @@ class GeometryEngine:
             try:
                 detections = self.detector.detect(image_bgr, min_score=review_threshold)
             except Exception as exc:  # a broken model must never take the pipeline down
-                log.warning("Obstacle detector failed (%s); using classical fallback", exc)
+                log.warning("Obstacle detector failed (%s); using classical fallback", exc, exc_info=True)
 
         if detections is None:
             obstacles, confidence = self._detect_classical(image_bgr, wall_w_mm, wall_h_mm, sensitivity)
@@ -110,10 +112,13 @@ class GeometryEngine:
             norm_w = (det.x2 - det.x1) / img_w
             norm_h = (det.y2 - det.y1) / img_h
 
-            if det.confidence >= accept_threshold:
+            if det.confidence >= accept_threshold and det.class_name in OBSTACLE_CLASS_INFO:
                 obs_type = det.class_name
                 base_label, depth_mm = OBSTACLE_CLASS_INFO[det.class_name]
             else:
+                # Confidence below the accept threshold, or a class name the app doesn't
+                # know about (e.g. a future model with a class we haven't wired up yet):
+                # fall back to "unverified" rather than raising a bare KeyError.
                 obs_type = "unverified"
                 base_label, depth_mm = UNVERIFIED_INFO
 
@@ -189,14 +194,24 @@ class GeometryEngine:
         matrix = cv2.getPerspectiveTransform(src, dst)
         return cv2.warpPerspective(image_bgr, matrix, (out_w, out_h))
 
-    def normalize_obstacles(self, obstacles: Any) -> List[Dict[str, Any]]:
+    def normalize_obstacles(
+        self,
+        obstacles: Any,
+        wall_w_mm: float = 4000.0,
+        wall_h_mm: float = 2800.0,
+    ) -> List[Dict[str, Any]]:
         """
         Validate client-supplied obstacles and refresh id, label and depth from the
         obstacle type, so the server stays the single source of truth for those.
+        x/y/w/h are clamped (not rejected) into [0, wall_w_mm] / [0, wall_h_mm] as a
+        defensive bound, so an out-of-range client value can never propagate an
+        infinite or huge number into the exported mission manifest.
         Raises ValueError with a message safe to show to the operator.
         """
         if not isinstance(obstacles, list):
             raise ValueError("obstacles must be a list")
+        if len(obstacles) > self.MAX_OBSTACLES:
+            raise ValueError(f"too many obstacles (max {self.MAX_OBSTACLES})")
 
         cleaned: List[Dict[str, Any]] = []
         for number, obs in enumerate(obstacles, start=1):
@@ -208,6 +223,11 @@ class GeometryEngine:
                 raise ValueError(f"obstacle {number} needs numeric x, y, w and h")
             if not all(math.isfinite(v) for v in (x, y, w, h)) or w <= 0 or h <= 0:
                 raise ValueError(f"obstacle {number} has an invalid size or position")
+
+            x = max(0.0, min(wall_w_mm, x))
+            y = max(0.0, min(wall_h_mm, y))
+            w = max(0.0, min(wall_w_mm, w))
+            h = max(0.0, min(wall_h_mm, h))
 
             obs_type = obs.get("type", "unverified")
             if obs_type in OBSTACLE_CLASS_INFO:
@@ -229,9 +249,8 @@ class GeometryEngine:
                 "h": round(h, 1),
                 "depth_mm": depth_mm,
             }
-            for optional in ("confidence", "norm"):
-                if optional in obs:
-                    cleaned_obs[optional] = obs[optional]
+            if "confidence" in obs:
+                cleaned_obs["confidence"] = obs["confidence"]
             if obs_type == "unverified" and obs.get("guess") in OBSTACLE_CLASS_INFO:
                 cleaned_obs["guess"] = obs["guess"]
             cleaned.append(cleaned_obs)
