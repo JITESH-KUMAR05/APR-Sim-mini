@@ -150,6 +150,31 @@ class TestEvaluate(unittest.TestCase):
         self.assertEqual(stats["window"]["fn"], 1)
         self.assertEqual(stats["window"]["found_any"], 0)
 
+    def test_per_class_true_positive_is_never_missing_from_found_any(self):
+        # Two overlapping ground truths of DIFFERENT classes: a window box (0,0)-(10,10) and a
+        # door box (0,0)-(10,12), both in the top-left corner of the 100x100 test image. A single
+        # window detection at (0,0)-(10,11) sits between them, but is geometrically closer to the
+        # door box (IoU ~0.917) than to the window box (IoU ~0.909) -- both above the 0.5 match
+        # threshold. In the GLOBAL cross-class race, the door ground truth wins that detection's
+        # match slot (door isn't even a candidate in window's per-class race). Before the fix,
+        # window's found_any counted only the global "found" set, so a window ground truth that
+        # was correctly matched in window's own per-class race (tp=1) was reported as not found
+        # at all (found_any=0) -- a self-contradiction this test guards against.
+        with tempfile.TemporaryDirectory() as tmp:
+            images, labels = Path(tmp) / "images", Path(tmp) / "labels"
+            images.mkdir()
+            labels.mkdir()
+            cv2.imwrite(str(images / "corner.png"), np.zeros((100, 100, 3), dtype=np.uint8))
+            (labels / "corner.txt").write_text(
+                "0 0.05 0.05 0.1 0.1\n"  # window at (0,0)-(10,10)
+                "1 0.05 0.06 0.1 0.12\n"  # door at (0,0)-(10,12), slightly larger/overlapping
+            )
+            stats = evaluate(
+                FakeDetector([Detection("window", 0.9, 0, 0, 10, 11)]), images, labels, CLASS_NAMES, 0.25
+            )
+        self.assertEqual(stats["window"]["tp"], 1)
+        self.assertEqual(stats["window"]["found_any"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

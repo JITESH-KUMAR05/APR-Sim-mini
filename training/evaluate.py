@@ -92,7 +92,8 @@ def evaluate(detector, images_dir, labels_dir, class_names, min_score: float) ->
             entry["tp"] += len(matches)
             entry["fn"] += len(gt_idx) - len(matches)
             entry["fp"] += len(det_idx) - len(matches)
-            entry["found_any"] += sum(1 for i in gt_idx if i in found)
+            matched_gt_indices = {gt_idx[m[0]] for m in matches}
+            entry["found_any"] += sum(1 for i in gt_idx if i in found or i in matched_gt_indices)
     return stats
 
 
