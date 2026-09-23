@@ -8,3 +8,6 @@ venv/
 .vercel
 exports/*
 !exports/.gitkeep
+training/data/
+training/runs/
+*.pt
