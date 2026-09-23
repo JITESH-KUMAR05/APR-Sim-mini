@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from geometry_engine import GeometryEngine
 from cad_exporter import CADExporter
@@ -34,6 +35,11 @@ os.makedirs(SAMPLES_DIR, exist_ok=True)
 app = Flask(__name__, static_folder=STATIC_DIR, template_folder=TEMPLATES_DIR, static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB cap on uploads
 CORS(app)
+
+
+@app.errorhandler(413)
+def handle_request_too_large(_error):
+    return jsonify({"success": False, "error": "Request too large (max 16 MB)"}), 413
 
 geometry_engine = GeometryEngine(detector=load_default_detector())
 cad_exporter = CADExporter()
@@ -254,6 +260,8 @@ def analyze_wall():
 
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
+    except RequestEntityTooLarge:
+        return jsonify({"success": False, "error": "Request too large (max 16 MB)"}), 413
     except Exception as e:
         import traceback
         traceback.print_exc()

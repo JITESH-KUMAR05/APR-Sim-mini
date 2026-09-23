@@ -160,5 +160,38 @@ class TestAnalyzeCorners(unittest.TestCase):
         self.assertEqual(self.upload().status_code, 200)
 
 
+class TestRequestTooLarge(unittest.TestCase):
+    """An oversized request must still get a JSON error, not Werkzeug's HTML 413 page."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = app_module.app.test_client()
+
+    def setUp(self):
+        self.original_limit = app_module.app.config["MAX_CONTENT_LENGTH"]
+        app_module.app.config["MAX_CONTENT_LENGTH"] = 10
+
+    def tearDown(self):
+        app_module.app.config["MAX_CONTENT_LENGTH"] = self.original_limit
+
+    def test_oversized_analyze_upload_is_a_json_413(self):
+        import io
+
+        data = {**FORM, "file": (io.BytesIO(b"x" * 100), "wall.png")}
+        data.pop("sample_id")
+        res = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
+        self.assertEqual(res.status_code, 413)
+        self.assertFalse(json.loads(res.data)["success"])
+
+    def test_oversized_replan_payload_is_a_json_413(self):
+        res = self.client.post(
+            "/api/replan",
+            data=json.dumps({"obstacles": [], "width_mm": 4000, "height_mm": 2800, "padding": "x" * 100}),
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 413)
+        self.assertFalse(json.loads(res.data)["success"])
+
+
 if __name__ == "__main__":
     unittest.main()
