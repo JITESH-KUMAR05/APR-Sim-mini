@@ -460,7 +460,7 @@ class RoverSimulation {
         }
 
         // 3. Draw Continuous Painted Trail
-        if (this.viewMode !== 'cells') {
+        if (this.viewMode !== 'cells' && this.paintCanvas.width > 0 && this.paintCanvas.height > 0) {
             this.ctx.drawImage(this.paintCanvas, 0, 0, W, H);
         }
 
