@@ -4,12 +4,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "training"))
 
 from build_dataset import merge_sources, parse_names, remap_label_lines, write_dataset_yaml
-from obstacle_detector import CLASS_NAMES
+from evaluate import evaluate, greedy_match, iou, read_yolo_labels, summarize
+from fakes import FakeDetector
+from obstacle_detector import CLASS_NAMES, Detection
 
 
 class TestParseNames(unittest.TestCase):
@@ -88,6 +93,62 @@ class TestWriteDatasetYaml(unittest.TestCase):
             text = (Path(tmp) / "dataset.yaml").read_text()
         self.assertIn("names:\n  0: window\n  1: door", text)
         self.assertIn("test: test/images", text)
+
+
+class TestMatching(unittest.TestCase):
+    def test_iou(self):
+        self.assertAlmostEqual(iou((0, 0, 10, 10), (0, 0, 10, 10)), 1.0)
+        self.assertEqual(iou((0, 0, 10, 10), (20, 20, 30, 30)), 0.0)
+        self.assertAlmostEqual(iou((0, 0, 10, 10), (5, 0, 15, 10)), 1 / 3)
+
+    def test_greedy_match_pairs_highest_scoring_detection_first(self):
+        gts = [(0, 0, 10, 10)]
+        dets = [(0, 0, 10, 10), (1, 1, 10, 10)]
+        self.assertEqual(greedy_match(gts, dets, [0.6, 0.9]), [(0, 1)])
+
+    def test_greedy_match_ignores_low_overlap(self):
+        self.assertEqual(greedy_match([(0, 0, 10, 10)], [(50, 50, 60, 60)], [0.9]), [])
+
+
+class TestEvaluate(unittest.TestCase):
+    def make_split(self, tmp):
+        images, labels = Path(tmp) / "images", Path(tmp) / "labels"
+        images.mkdir()
+        labels.mkdir()
+        cv2.imwrite(str(images / "wall.png"), np.zeros((100, 100, 3), dtype=np.uint8))
+        (labels / "wall.txt").write_text("0 0.5 0.5 0.4 0.4\n")  # a window at (30,30)-(70,70)
+        return images, labels
+
+    def test_read_yolo_labels_returns_pixel_boxes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, labels = self.make_split(tmp)
+            self.assertEqual(read_yolo_labels(labels / "wall.txt", 100, 100), [(0, 30.0, 30.0, 70.0, 70.0)])
+            self.assertEqual(read_yolo_labels(labels / "missing.txt", 100, 100), [])
+
+    def test_correct_detection_counts_as_true_positive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            images, labels = self.make_split(tmp)
+            stats = evaluate(FakeDetector([Detection("window", 0.9, 30, 30, 70, 70)]), images, labels, CLASS_NAMES, 0.25)
+            summary = summarize(stats)
+        self.assertEqual(stats["window"]["tp"], 1)
+        self.assertEqual(summary["window"]["recall"], 1.0)
+        self.assertEqual(summary["window"]["precision"], 1.0)
+        self.assertIsNone(summary["door"]["recall"])
+
+    def test_wrong_class_is_a_miss_for_the_class_but_still_found_by_any_box(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            images, labels = self.make_split(tmp)
+            stats = evaluate(FakeDetector([Detection("door", 0.9, 30, 30, 70, 70)]), images, labels, CLASS_NAMES, 0.25)
+        self.assertEqual(stats["window"]["fn"], 1)
+        self.assertEqual(stats["door"]["fp"], 1)
+        self.assertEqual(stats["window"]["found_any"], 1)
+
+    def test_no_detection_is_a_miss_and_not_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            images, labels = self.make_split(tmp)
+            stats = evaluate(FakeDetector([]), images, labels, CLASS_NAMES, 0.25)
+        self.assertEqual(stats["window"]["fn"], 1)
+        self.assertEqual(stats["window"]["found_any"], 0)
 
 
 if __name__ == "__main__":
