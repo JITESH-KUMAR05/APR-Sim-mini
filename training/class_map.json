@@ -1,0 +1,18 @@
+{
+  "team": {
+    "window": "window",
+    "door": "door",
+    "ac_unit": "ac_unit",
+    "meter_panel": "meter_panel",
+    "pipe": "pipe",
+    "grill": "grill"
+  },
+  "door_window_detection": {
+    "door": "door",
+    "window": "window"
+  },
+  "wall_door_window_obb": {
+    "door": "door",
+    "window": "window"
+  }
+}
