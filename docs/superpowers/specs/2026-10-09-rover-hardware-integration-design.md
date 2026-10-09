@@ -23,7 +23,10 @@ Inputs read for this design: the team's frozen architecture (`APR_Final_Review_D
 | Control architecture | **Raspberry Pi (brain) + Arduino (hardware brain)**, built from the Arduino upward |
 | Parts in hand | A controller board only (Arduino or Pi acceptable). Motors, driver, pump, valve, nozzle, power and chassis are still to be sourced. |
 | Demo wall | 8 ft x 8 ft (2438.4 mm square, 5.95 m2), single coat |
-| Paint supply | 1 L onboard tank recommended. External paint and power line (umbilical) stays a supported alternative to cut weight. |
+| Paint supply | 1 L onboard tank recommended. External paint line (umbilical) stays a supported alternative to cut weight. |
+| Power | External supply over a tether is the leading idea. Onboard battery sizing is deferred. The "65,000" figure on the sheet was discussion only and is ignored. |
+| Start position | Chosen by the operator per wall and conditions (see section 2). No trained model decides it. |
+| Hand-drawn sheets | Rough ideation. They informed the design but are not requirements. |
 
 ## Non-goals
 
@@ -56,7 +59,7 @@ Invariants:
 
 Current exports are absolute waypoints (x, y, spray flag) in a wall frame with origin bottom-left, and the planner starts at the top row. A rover cannot execute that directly.
 
-1. **Start corner and row order.** `plan_coverage_path` gains `start_corner` (default bottom-left, the rover's (0,0)) and `row_order` (default bottom-up). Top-down is better on the vertical wall because it avoids drips on fresh paint, so it stays a setting decided in P4.
+1. **Operator-chosen start.** `plan_coverage_path` gains `start_corner` (any of the four wall corners, default bottom-left, the rover's (0,0)) and `row_order` (bottom-up or top-down, default bottom-up). The operator picks them in the app per wall and conditions, places the rover there, and the planner builds the path from that start. Top-down avoids drips on fresh paint on a vertical wall, which is one reason the choice is per job. No trained model decides the start: that keeps the frozen rule that AI never decides motion. A deterministic "suggest a start" heuristic (for example fewest transit metres) can be added later and would still only suggest.
 2. **Rover mission export, `apr-rover-mission/1` (JSON).** A new module `rover_mission.py` compiles waypoints into primitives:
    - `MOVE <mm>` with a spray flag
    - `TURN <deg>` (on the spot, skid-steer or differential)
@@ -102,7 +105,7 @@ Pose is wheel-encoder distance plus gyro heading, starting at (0,0). Drift is th
 | Edge sensing | 2 micro-switch bumpers, distance sensor optional | For `EDGE_ALIGN` |
 | Spray | 12 V diaphragm pump + solenoid valve + flat-fan nozzle | The app plans 0.73 L over about 117 s of spraying, about 0.35 to 0.4 L/min at the nozzle |
 | Tank | 1 L | 0.5 L covers about two thirds of the wall at the app's film target |
-| Power | 3S Li-ion pack, 5 Ah, fuse, 5 V buck converter for the Pi | Peak draw about 5 to 6 A, full run about 3 minutes. An external 12 V supply plus paint hose is a drop-in alternative. |
+| Power | Leading idea: external 12 V supply over a tether, with fuse and a 5 V buck converter for the Pi. Fallback: 3S Li-ion pack, 5 Ah. | Peak draw about 5 to 6 A, full run about 3 minutes, so either works on the floor. On the wall a tether adds a cable to manage (P4). |
 | Pi | Zero 2 W for minimum weight, or Pi 4/5 if a camera is wanted later | WiFi and Python are enough for Stage A |
 
 These are sizing guidance, not a finished parts list. A diaphragm pump gives low-pressure spray, not true airless, so film thickness validation is out of scope here.
@@ -150,12 +153,11 @@ tests/test_rover_mission.py  and further test files per plan
 - **Vertical wall** is not designed here. The requirements document already lists the open items: vacuum pump within the Rs 15 lakh budget, battery sizing for pump plus motors together, steering, a numeric fall-detection threshold, and IP54 against wet paint.
 - **Paint estimate gap.** The app estimates 0.73 L for the 8 x 8 ft wall, the project lead's sheet says about 0.4 to 0.5 L. Both fit once the film thickness is stated. The tank is sized from the app's figure.
 
-## Open questions for the project lead
+## Resolved notes and deferred items
 
-These items on the hand-drawn sheets could not be read reliably. Nothing above depends on them, but they may change the power and mechanical design:
+Answers from the project lead on the hand-drawn sheets (2026-10-09):
 
-1. "65,000 -> KW / VA" and "65V" on the second sheet: battery or power figure, or something else?
-2. "Both Cups" next to the tall box with vertical bars: suction cups for the wall stage?
-3. The circle inside a box with a cable, at the bottom of the second sheet: pump, motor or nozzle?
-4. The unit with an arrow to "Serv(er)" on the first sheet, and the second circle after "Arduino": what do they stand for?
-5. Wall stage painting direction: bottom-up (rover starts at (0,0)) or top-down (fewer drips). Decided in P4.
+- The "65,000 -> KW / VA" and "65V" notes were discussion, not requirements. Power is to be supplied externally over a tether for now. Battery sizing is deferred.
+- Wall adhesion is not fixed. The idea under consideration is a bio-inspired design with multiple suction pads, like a lizard or gecko. It belongs to P4 and does not affect P1 to P3.
+- The remaining sketches (the box with a cable, the unit pointing to a server, the second circle after "Arduino") were rough ideation and are not requirements.
+- Start position and painting direction depend on the wall and its conditions. The operator chooses them per job (section 2). The system does not learn them.
