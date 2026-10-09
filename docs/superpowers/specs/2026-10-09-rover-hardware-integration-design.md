@@ -120,6 +120,7 @@ These are sizing guidance, not a finished parts list. A diaphragm pump gives low
 | P2 | Arduino firmware and serial protocol: safety state machine, motion, pump and valve, `docs/rover-protocol.md` | Bench only |
 | P3 | Pi agent and the Rover console in the app | Pi |
 | P4 | Vertical wall: adhesion, tracks, fall-arrest tether, payload. Separate spec and safety review. | Yes |
+| P5 | Learned navigation policy trained in simulation, suggest-only inside the safety envelope (section 6). Separate spec. Starts only after P1 to P3 and enough run logs exist. | Simulator, then floor |
 
 ### Hardware stages and exit criteria
 
@@ -145,6 +146,27 @@ rover/agent/                 Raspberry Pi Python agent
 docs/rover-protocol.md       protocol, written in P2
 tests/test_rover_mission.py  and further test files per plan
 ```
+
+## 6. Where learning fits
+
+The goal is a rover that decides well in many situations. Learning is used where it is safe and has data, and a deterministic safety envelope bounds everything else.
+
+**Learned, in scope**
+- **Perception.** The trained obstacle detector already built. Candidate extensions, each needing its own labelled data: wall surface condition (cracks, damp, peeling, texture) and a camera check of the finished coat for gaps and thin spots. Method: fine-tuned detection and segmentation models. Data, not the algorithm, is the limit.
+- **Plan suggestions.** Suggested start corner, row order, speed and spray settings for the wall's conditions. Shown to the operator, who accepts or changes them. First version is deterministic optimisation (cost function over transit length, drips, overlap). A learned suggester is allowed later if run logs justify it.
+
+**Run logging, built from the first floor run (P3 owns it, P2 firmware emits the fields)**
+- The Pi agent writes one JSONL file per run: timestamp, step id, planned and measured pose, `EDGE_ALIGN` corrections, spray state, sensor readings, faults, final result.
+- The file downloads to the laptop and is kept with the mission file that produced it.
+- This is the training data for P5, for spray-lead calibration, and for a learned drift model.
+
+**P5: learned navigation policy (later project, own spec)**
+- Trained in simulation first (candidate methods: reinforcement learning such as PPO or SAC with domain randomisation of slip, drift and valve delay, or imitation of the deterministic planner). The method is chosen in the P5 spec, not here.
+- It only suggests the next move. The safety envelope (speed and motion limits, edge sensors, watchdog, e-stop) is deterministic, lives on the Arduino, and cannot be overridden by it.
+- Prerequisites: P1 to P3 done, a simulator that models slip and delay, run logs from the real floor, and a deterministic baseline to beat.
+- Acceptance: beats the baseline on coverage and drift in simulation and on the floor, with zero safety-envelope violations. A learned policy never replaces the baseline until it has met this.
+
+Model output never reaches a motor, valve or adhesion command directly. This extends invariant 4: learned outputs are suggestions that the deterministic layer validates.
 
 ## Risks
 
