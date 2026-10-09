@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const overlapInput = $('overlap');
     const bufferInput = $('safetyBuffer');
     const sensitivityInput = $('sensitivity');
+    const startCornerInput = $('startCorner');
 
     // Value display spans
     const widthVal = $('widthValue');
@@ -408,6 +409,7 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('overlap_pct', overlapInput.value);
         formData.append('safety_buffer_mm', bufferInput.value);
         formData.append('sensitivity', sensitivityInput.value);
+        formData.append('start_corner', startCornerInput.value);
 
         if (selectedFile) {
             formData.append('file', selectedFile);
@@ -627,6 +629,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 spray_width_mm: wall.spray_width_mm,
                 overlap_pct: wall.overlap_pct,
                 safety_buffer_mm: wall.safety_buffer_mm,
+                start_corner: wall.start_corner,
                 obstacles
             })
         })
@@ -775,7 +778,9 @@ document.addEventListener('DOMContentLoaded', () => {
             ctx2d.arc(fx, fy, 6, 0, Math.PI * 2);
             ctx2d.fill();
             ctx2d.font = '10px "DM Mono", monospace';
-            ctx2d.fillText('START (0,0)', fx + 10, fy - 5);
+            const startLabel = `START (${Math.round(first.x)}, ${Math.round(first.y)})`;
+            const labelX = fx > width / 2 ? fx - 10 - ctx2d.measureText(startLabel).width : fx + 10;
+            ctx2d.fillText(startLabel, labelX, fy - 5);
 
             const lx = padX + (last.x * scaleX);
             const ly = padY + drawH - (last.y * scaleY);

@@ -1362,3 +1362,14 @@ footer strong {
 	padding: 9px 16px;
 	margin-left: auto;
 }
+
+/* Rover start corner */
+.param-group select {
+	width: 100%;
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	background: #071318;
+	color: var(--text);
+	padding: 8px 10px;
+	outline: none;
+}
