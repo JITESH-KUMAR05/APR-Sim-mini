@@ -30,6 +30,8 @@ LEGACY_OBSTACLE_INFO = {  # types still emitted by the classical fallback
     "switchboard": ("Utility Panel", 35.0),
     "fixture": ("Architectural Opening", 50.0),
 }
+START_CORNERS = ("bottom_left", "bottom_right", "top_left", "top_right")
+DEFAULT_START_CORNER = "bottom_left"  # the rover's (0,0)
 
 
 class GeometryEngine:
@@ -355,7 +357,59 @@ class GeometryEngine:
         obstacles.sort(key=lambda o: o["x"])
         return obstacles, round(confidence, 1)
 
+    @staticmethod
+    def parse_start_corner(raw: Any) -> str:
+        """Return a valid start corner. A missing or empty value means the default (bottom-left)."""
+        if raw is None or raw == "":
+            return DEFAULT_START_CORNER
+        if not isinstance(raw, str) or raw not in START_CORNERS:
+            raise ValueError(f"start_corner must be one of {', '.join(START_CORNERS)}")
+        return raw
+
     def plan_coverage_path(
+        self,
+        wall_w_mm: float,
+        wall_h_mm: float,
+        spray_width_mm: float,
+        overlap_pct: float,
+        safety_buffer_mm: float,
+        obstacles: List[Dict[str, Any]],
+        start_corner: str = DEFAULT_START_CORNER
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Boustrophedon coverage that starts in the given wall corner: rows progress away from
+        the start side and the first pass runs from the start corner across the wall.
+        The path is planned from the top-left and mirrored, so obstacles are mirrored into
+        that frame first (copies, the caller's dicts are not changed).
+        """
+        start_corner = self.parse_start_corner(start_corner)
+        flip_x = start_corner.endswith("right")
+        flip_y = start_corner.startswith("bottom")
+        if not (flip_x or flip_y):
+            return self._plan_coverage_from_top_left(
+                wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
+            )
+
+        mirrored_obstacles = []
+        for obs in obstacles:
+            mirrored = dict(obs)
+            if flip_x:
+                mirrored["x"] = wall_w_mm - (obs["x"] + obs["w"])
+            if flip_y:
+                mirrored["y"] = wall_h_mm - (obs["y"] + obs["h"])
+            mirrored_obstacles.append(mirrored)
+
+        waypoints, stats = self._plan_coverage_from_top_left(
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, mirrored_obstacles
+        )
+        for wp in waypoints:
+            if flip_x:
+                wp["x"] = round(wall_w_mm - wp["x"], 1)
+            if flip_y:
+                wp["y"] = round(wall_h_mm - wp["y"], 1)
+        return waypoints, stats
+
+    def _plan_coverage_from_top_left(
         self,
         wall_w_mm: float,
         wall_h_mm: float,
