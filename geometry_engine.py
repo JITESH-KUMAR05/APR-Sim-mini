@@ -562,11 +562,13 @@ class GeometryEngine:
         wall_w_mm: float,
         wall_h_mm: float,
         obstacles: List[Dict[str, Any]],
-        path_stats: Dict[str, Any]
+        path_stats: Dict[str, Any],
+        speed_mps: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Calculate complete engineering metrics compliant with APR requirements:
         Gross Area, Masked Area, Net Paintable Area, Paint Volume, and Cycle Time.
+        speed_mps overrides the default rover speed (the rover profile's max speed).
         """
         gross_area_m2 = (wall_w_mm * wall_h_mm) / 1e6
 
@@ -586,7 +588,7 @@ class GeometryEngine:
         paint_liters = (net_paintable_area_m2 * wft_mm) / self.defaults["transfer_efficiency"]
 
         # Cycle time estimation (Nominal rover speed = 0.25 m/s, plus row turn time of 3.5s)
-        speed = self.defaults["rover_speed_mps"]
+        speed = speed_mps if speed_mps is not None else self.defaults["rover_speed_mps"]
         motion_time_sec = path_stats["total_distance_m"] / speed
         turns_time_sec = path_stats["num_rows"] * 3.5
         total_time_sec = motion_time_sec + turns_time_sec

@@ -104,6 +104,25 @@ class TestCompile(unittest.TestCase):
                     self.assertAlmostEqual(step["y_mm"], y, delta=0.01)
                     self.assertAlmostEqual(step["heading_deg"], heading, delta=0.01)
 
+    def test_stored_pose_equals_the_replay_on_a_wall_that_is_not_a_multiple_of_the_pitch(self):
+        width, height = 2438.4, 2435.2
+        for corner in START_CORNERS:
+            with self.subTest(corner=corner):
+                waypoints, stats = GeometryEngine().plan_coverage_path(width, height, 250.0, 12.0, 60.0, [], corner)
+                mission = compile_rover_mission(
+                    waypoints, width, height, 250.0, stats["effective_step_mm"], corner, load_profile()
+                )
+                replay = replay_rover_mission(mission)
+                for step, (x, y, heading) in zip(mission["steps"], replay["poses"]):
+                    self.assertAlmostEqual(step["x_mm"], x, delta=0.01)
+                    self.assertAlmostEqual(step["y_mm"], y, delta=0.01)
+                    self.assertAlmostEqual(step["heading_deg"], heading, delta=0.01)
+                expected = planner_moves(waypoints)
+                self.assertEqual(len(replay["moves"]), len(expected))
+                for (_, e_end, _), (_, a_end, _) in zip(expected, replay["moves"]):
+                    self.assertAlmostEqual(e_end[0], a_end[0], delta=1.0)
+                    self.assertAlmostEqual(e_end[1], a_end[1], delta=1.0)
+
     def test_one_edge_align_per_full_row_pass_on_a_clear_wall(self):
         for corner in START_CORNERS:
             with self.subTest(corner=corner):
@@ -122,6 +141,12 @@ class TestCompile(unittest.TestCase):
         self.assertTrue(verify_checksum(mission))
         tampered = copy.deepcopy(mission)
         tampered["steps"][0]["mm"] += 1.0
+        self.assertFalse(verify_checksum(tampered))
+
+    def test_checksum_detects_a_tampered_header(self):
+        _, _, mission = plan_and_compile("bottom_left")
+        tampered = copy.deepcopy(mission)
+        tampered["wall"]["width_mm"] += 1
         self.assertFalse(verify_checksum(tampered))
 
     def test_mission_survives_a_json_round_trip(self):

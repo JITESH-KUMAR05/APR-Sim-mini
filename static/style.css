@@ -1372,4 +1372,9 @@ footer strong {
 	color: var(--text);
 	padding: 8px 10px;
 	outline: none;
+	font: 12px 'DM Mono', monospace;
+}
+
+.param-group select:focus {
+	border-color: var(--cyan);
 }

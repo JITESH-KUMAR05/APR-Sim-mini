@@ -1,5 +1,6 @@
 import math
 
+
 class FakeDetector:
     """Stands in for ObstacleDetector: returns preset detections at or above min_score."""
 

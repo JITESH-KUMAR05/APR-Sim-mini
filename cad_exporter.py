@@ -12,6 +12,8 @@ import json
 import math
 from typing import Dict, List, Any, Tuple
 
+from geometry_engine import DEFAULT_START_CORNER
+
 
 class CADExporter:
     def __init__(self):
@@ -378,7 +380,7 @@ class CADExporter:
         overlap_pct: float = 12.0,
         safety_buffer_mm: float = 60.0,
         speed_mps: float = 0.25,
-        start_corner: str = "bottom_left"
+        start_corner: str = DEFAULT_START_CORNER
     ) -> str:
         """
         Generate ROS 2 / APR Mission Planner execution manifest JSON schema.

@@ -6,6 +6,7 @@ Pair-programmed for presentation & engineering demonstration.
 
 import os
 import io
+import logging
 import json
 import base64
 import time
@@ -34,6 +35,8 @@ SAMPLES_DIR = os.path.join(BASE_DIR, "samples")
 os.makedirs(EXPORTS_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
 
+log = logging.getLogger(__name__)
+
 app = Flask(__name__, static_folder=STATIC_DIR, template_folder=TEMPLATES_DIR, static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB cap on uploads
 CORS(app)
@@ -45,7 +48,11 @@ def handle_request_too_large(_error):
 
 geometry_engine = GeometryEngine(detector=load_default_detector())
 cad_exporter = CADExporter()
-ROVER_PROFILE = load_profile()
+try:
+    ROVER_PROFILE = load_profile()
+except (OSError, ValueError) as exc:
+    log.warning("rover profile unavailable, rover mission export disabled: %s", exc)
+    ROVER_PROFILE = None
 
 # In-memory cached active state for immediate downloads
 current_session = {
@@ -116,10 +123,21 @@ def count_unverified(obstacles):
 def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
                   start_corner=DEFAULT_START_CORNER):
     """Plan coverage, compute metrics, write every export file and refresh the session cache."""
+    start_corner = GeometryEngine.parse_start_corner(start_corner)
     waypoints, path_stats = geometry_engine.plan_coverage_path(
         wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
     )
-    metrics = geometry_engine.compute_metrics(wall_w_mm, wall_h_mm, obstacles, path_stats)
+    metrics = geometry_engine.compute_metrics(
+        wall_w_mm, wall_h_mm, obstacles, path_stats,
+        speed_mps=ROVER_PROFILE["max_speed_mps"] if ROVER_PROFILE else None,
+    )
+
+    # Compile first so a compile error cannot leave the other exports new and the rover file stale.
+    rover_mission = None
+    if ROVER_PROFILE is not None:
+        rover_mission = compile_rover_mission(
+            waypoints, wall_w_mm, wall_h_mm, spray_width_mm, path_stats["effective_step_mm"], start_corner, ROVER_PROFILE
+        )
 
     dxf_content = cad_exporter.export_dxf(wall_w_mm, wall_h_mm, obstacles, waypoints)
     dxf_path = os.path.join(EXPORTS_DIR, "paintpilot_wall.dxf")
@@ -157,12 +175,12 @@ def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buff
     with open(csv_path, "w", encoding="utf-8") as f:
         f.write(motion_csv)
 
-    rover_mission = compile_rover_mission(
-        waypoints, wall_w_mm, wall_h_mm, spray_width_mm, path_stats["effective_step_mm"], start_corner, ROVER_PROFILE
-    )
     rover_path = os.path.join(EXPORTS_DIR, "apr_rover_mission.json")
-    with open(rover_path, "w", encoding="utf-8") as f:
-        json.dump(rover_mission, f, indent=2)
+    if rover_mission is not None:
+        with open(rover_path, "w", encoding="utf-8") as f:
+            json.dump(rover_mission, f, indent=2)
+    elif os.path.exists(rover_path):
+        os.remove(rover_path)  # never serve a stale mission from an earlier run
 
     current_session.update({
         "wall_w_mm": wall_w_mm,

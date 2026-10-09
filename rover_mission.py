@@ -12,6 +12,25 @@ TURN and EDGE_ALIGN always run with the spray off. Headings are degrees counter-
 from +x. Every step carries the pose the rover is expected to have after it, so a console
 can compare planned and measured position. replay_rover_mission() recomputes the path from
 the steps alone, which is what the tests use to prove the compiled mission matches the planner.
+
+File contract
+
+- x_mm/y_mm and start_pose are the position of the spray nozzle centre in the wall frame.
+  start_pose is where the operator places the rover (nozzle centre) and the direction it faces.
+- EDGE_ALIGN: the rover drives slowly along its current heading until its edge sensor triggers
+  (firmware faults if it does not trigger within a firmware-defined distance), then sets the
+  coordinate on `axis` to value_mm. The step's own x_mm/y_mm are the expected pose BEFORE that
+  reset. The offset between the edge sensor and the nozzle centre belongs to the rover profile
+  (added in plan P2).
+- speed_mps is the speed MOVE steps are driven at, spray on or off, and equals the profile's
+  max_speed_mps.
+- Obstacles are no-paint zones, not no-go zones: a MOVE with spray 0 may cross a keep-out box,
+  including at the start corner where the first pass can begin inside one.
+- Checksum: sha256 (hex) of the UTF-8 bytes of Python
+  json.dumps(body, sort_keys=True, separators=(",", ":")), where body is the mission dict without
+  its `checksum` key. Float text is Python's repr (for example 0.0, 90.0), so a verifier in
+  another language must reproduce that formatting. A language-neutral canonical form is to be
+  decided in the P2 spec, while the schema is still /1 with no consumers.
 """
 
 import hashlib
@@ -96,8 +115,14 @@ def compile_rover_mission(
             heading = target
             steps.append({"i": len(steps) + 1, "op": "TURN", "deg": turn,
                           "x_mm": x, "y_mm": y, "heading_deg": heading})
-        distance = round(math.hypot(q["x"] - x, q["y"] - y), 3)
-        x, y = q["x"], q["y"]
+        # Distance is the projection on the move axis and only that coordinate is updated, so the
+        # stored pose is exactly what replay_rover_mission() computes from the steps.
+        horizontal = heading in (0.0, 180.0)
+        distance = round(abs(q["x"] - x) if horizontal else abs(q["y"] - y), 3)
+        if horizontal:
+            x = q["x"]
+        else:
+            y = q["y"]
         steps.append({"i": len(steps) + 1, "op": "MOVE", "mm": distance, "spray": 1 if spray else 0,
                       "x_mm": x, "y_mm": y, "heading_deg": heading})
         if heading in (0.0, 180.0) and (abs(x) <= _EPS_MM or abs(x - wall_w_mm) <= _EPS_MM):

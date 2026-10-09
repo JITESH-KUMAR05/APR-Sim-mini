@@ -57,14 +57,14 @@ Invariants:
 
 ## 2. Mission file and planner changes
 
-Current exports are absolute waypoints (x, y, spray flag) in a wall frame with origin bottom-left, and the planner starts at the top row. A rover cannot execute that directly.
+Current exports are absolute waypoints (x, y, spray flag) in a wall frame with origin bottom-left. Before P1 the planner always started at the top row; it now starts in the chosen corner (item 1). A rover cannot execute that directly.
 
 1. **Operator-chosen start.** `plan_coverage_path` gains `start_corner`, one of the four wall corners (default `bottom_left`, the rover's (0,0)). The corner fixes both the side the first pass starts from and the direction rows progress: rows move away from the start side, so a bottom corner paints bottom-up and a top corner paints top-down. Top-down avoids drips on fresh paint on a vertical wall, which is one reason the choice is per job. The operator picks the corner in the app, places the rover there, and the planner builds the path from that start. No trained model decides the start: that keeps the frozen rule that AI never decides motion. A deterministic "suggest a start" heuristic (for example fewest transit metres) can be added later and would still only suggest.
 2. **Rover mission export, `apr-rover-mission/1` (JSON).** A new module `rover_mission.py` compiles waypoints into primitives:
    - `MOVE <mm>` with a spray flag
    - `TURN <deg>` (on the spot, skid-steer or differential)
    - `EDGE_ALIGN` at row ends, to re-zero one coordinate against the wall edge
-   - Each step carries the expected (x, y) after it, for comparing planned and real position. The file has a header (wall size, start corner, spray width, row pitch, speed, the rover profile) and a checksum. The paint estimate stays in the existing mission manifest JSON.
+   - Each step carries the expected (x, y) after it, for comparing planned and real position. The file has a header (wall size, start corner, spray width, row pitch, speed, the rover profile) and a checksum. The paint estimate stays in the existing mission manifest JSON. Obstacles are no-paint zones, not no-go zones: a spray-off MOVE can cross a keep-out box, including at the start corner, where the first pass may begin inside one. Choose another start corner, or plan around the obstacle by hand. Automatic no-go avoidance is future work. The full file contract (nozzle-centre reference, EDGE_ALIGN semantics, speed, checksum procedure) is in the docstring of rover_mission.py.
 3. **`rover_profile.json`.** Constants shared by the compiler and the firmware. P1 ships the wheel diameter and max speed. P2 adds ticks per revolution, wheelbase and the pump's maximum continuous run time once the parts are chosen.
 4. **Honest parameters.** The exports use the request's real spray width, overlap and speed. Today the manifest hardcodes 250 mm and 0.25 m/s.
 5. Existing DXF, OBJ, CSV and JSON exports are unchanged apart from the honest parameters in item 4. The 2D map's start marker shows the real start position. The simulation keeps playing the planner's waypoints. A replay test proves that the compiled rover steps reproduce those waypoints within 0.01 mm, so the preview matches what the rover receives without a second playback path in `static/rover_sim.js`.
@@ -75,7 +75,7 @@ For the 8 x 8 ft wall the current planner gives 12 rows, row pitch 220 mm (250 m
 
 ### Links
 
-- **Pi to Arduino:** USB serial, line-based ASCII with a CRC per line. The Pi sends one step at a time (`MOVE`, `TURN`, `SPRAY`, `STOP`). The Arduino replies `ACK`, `DONE` or `FAULT` and streams `POSE x y heading` about 10 times a second. The exact grammar is written in `docs/rover-protocol.md` during P2.
+- **Pi to Arduino:** USB serial, line-based ASCII with a CRC per line. The Pi sends one step at a time (`MOVE` carrying the spray flag, as in the mission file, `TURN`, `EDGE_ALIGN`, `STOP`). The Arduino replies `ACK`, `DONE` or `FAULT` and streams `POSE x y heading` about 10 times a second. The exact grammar is written in `docs/rover-protocol.md` during P2.
 - **Laptop to Pi:** WiFi. The Pi exposes `POST /mission` (verifies the checksum, stores the file), `/start`, `/pause`, `/stop`, `/estop`, and a live telemetry stream. The app gets a Rover console page for this.
 - **The Rover console works only from the local copy of the app** (`uv run python app.py` on the rover's WiFi). The Vercel deployment cannot reach a rover on a LAN, and browsers block an https page from calling a local http device. Vercel keeps the planning side only.
 
@@ -89,7 +89,7 @@ BOOT, IDLE (all outputs off), ARMED, RUNNING, PAUSED, DONE.
 
 ### Positioning
 
-Pose is wheel-encoder distance plus gyro heading, starting at (0,0). Drift is the largest technical risk: a 1 degree heading error over a 2.4 m row is about 40 mm sideways, against a 220 mm row pitch.
+Pose comes from wheel encoders plus a gyro, starting at the mission's start_pose (for the default bottom-left start that is the nozzle centre at (0, 125 mm) facing +x; (0,0) is the wall corner). Drift is the largest technical risk: a 1 degree heading error over a 2.4 m row is about 40 mm sideways, against a 220 mm row pitch.
 
 - Each row ends with `EDGE_ALIGN`: the rover touches the wall edge with a bumper switch (or distance sensor) and resets that coordinate.
 - On the floor the painted stripes are the measurement.
@@ -153,7 +153,7 @@ The goal is a rover that decides well in many situations. Learning is used where
 
 **Learned, in scope**
 - **Perception.** The trained obstacle detector already built. Candidate extensions, each needing its own labelled data: wall surface condition (cracks, damp, peeling, texture) and a camera check of the finished coat for gaps and thin spots. Method: fine-tuned detection and segmentation models. Data, not the algorithm, is the limit.
-- **Plan suggestions.** Suggested start corner, row order, speed and spray settings for the wall's conditions. Shown to the operator, who accepts or changes them. First version is deterministic optimisation (cost function over transit length, drips, overlap). A learned suggester is allowed later if run logs justify it.
+- **Plan suggestions.** Suggested start corner, speed and spray settings for the wall's conditions. Shown to the operator, who accepts or changes them. First version is deterministic optimisation (cost function over transit length, drips, overlap). A learned suggester is allowed later if run logs justify it.
 
 **Run logging, built from the first floor run (P3 owns it, P2 firmware emits the fields)**
 - The Pi agent writes one JSONL file per run: timestamp, step id, planned and measured pose, `EDGE_ALIGN` corrections, spray state, sensor readings, faults, final result.

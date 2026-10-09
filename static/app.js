@@ -229,6 +229,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Generate Button
     generateBtn.addEventListener('click', runAnalysis);
 
+    // Changing the start corner after Generate re-plans so the exports match the dropdown
+    startCornerInput.addEventListener('change', () => {
+        if (!currentData) return;
+        if (replanInFlight) {
+            startCornerInput.value = currentData.wall.start_corner;
+            return;
+        }
+        replan(currentData.obstacles, startCornerInput.value);
+    });
+
     // Export buttons
     document.querySelectorAll('[data-export]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -614,7 +624,7 @@ document.addEventListener('DOMContentLoaded', () => {
         replan(obstacles);
     }
 
-    function replan(obstacles) {
+    function replan(obstacles, startCorner = currentData.wall.start_corner) {
         const wall = currentData.wall;
         appendLog('Re-planning mission with reviewed obstacles...', 'info');
         replanInFlight = true;
@@ -629,7 +639,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 spray_width_mm: wall.spray_width_mm,
                 overlap_pct: wall.overlap_pct,
                 safety_buffer_mm: wall.safety_buffer_mm,
-                start_corner: wall.start_corner,
+                start_corner: startCorner,
                 obstacles
             })
         })
@@ -638,6 +648,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!ok || !body.success) throw new Error(body.error || 'Re-plan failed');
             currentData = {
                 ...currentData,
+                wall: { ...currentData.wall, start_corner: startCorner },
                 obstacles: body.obstacles,
                 waypoints: body.waypoints,
                 stats: body.stats,
@@ -651,6 +662,7 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch((err) => {
             appendLog(`Re-plan error: ${err.message}`, 'warn');
+            startCornerInput.value = currentData.wall.start_corner;
             replanInFlight = false;
             reviewList.querySelectorAll('button, select').forEach((el) => { el.disabled = false; });
         });

@@ -257,6 +257,7 @@ class TestStartCornerAndRoverMission(unittest.TestCase):
     def test_replan_honours_the_start_corner_and_defaults_to_bottom_left(self):
         with_corner = self.client.post("/api/replan", json={**WALL, "obstacles": [], "start_corner": "top_right"})
         self.assertEqual(json.loads(with_corner.data)["waypoints"][0]["x"], 4000.0)
+        self.assertEqual(self.download_json("rover")["wall"]["start_corner"], "top_right")
 
         default = json.loads(self.client.post("/api/replan", json={**WALL, "obstacles": []}).data)
         self.assertEqual((default["waypoints"][0]["x"], default["waypoints"][0]["y"]), (0.0, 125.0))
@@ -264,6 +265,26 @@ class TestStartCornerAndRoverMission(unittest.TestCase):
         bad = self.client.post("/api/replan", json={**WALL, "obstacles": [], "start_corner": "middle"})
         self.assertEqual(bad.status_code, 400)
         self.assertEqual(self.download_json("rover")["wall"]["start_corner"], "bottom_left")
+
+    def test_without_a_rover_profile_the_app_still_plans_and_serves_no_rover_file(self):
+        self.assertEqual(self.analyze().status_code, 200)
+        self.assertEqual(self.client.get("/api/download/rover").status_code, 200)
+        with mock.patch.object(app_module, "ROVER_PROFILE", None):
+            res = self.analyze()
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(json.loads(res.data)["success"])
+            stale = self.client.get("/api/download/rover")
+            self.assertEqual(stale.status_code, 404)
+            stale.close()
+            self.assertEqual(self.client.get("/api/download/json").status_code, 200)
+
+    def test_the_profile_speed_drives_metrics_manifest_and_rover_mission(self):
+        slow = {**app_module.ROVER_PROFILE, "max_speed_mps": 0.2}
+        with mock.patch.object(app_module, "ROVER_PROFILE", slow):
+            data = json.loads(self.analyze().data)
+            self.assertEqual(data["metrics"]["nominal_speed_mps"], 0.2)
+            self.assertEqual(self.download_json("json")["spray_parameters"]["nominal_speed_mps"], 0.2)
+            self.assertEqual(self.download_json("rover")["speed_mps"], 0.2)
 
 
 if __name__ == "__main__":

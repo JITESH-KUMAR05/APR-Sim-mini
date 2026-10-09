@@ -27,7 +27,9 @@ class TestRoverUi(unittest.TestCase):
         js = read("static", "app.js")
         self.assertIn("const startCornerInput = $('startCorner');", js)
         self.assertIn("formData.append('start_corner', startCornerInput.value);", js)
-        self.assertIn("start_corner: wall.start_corner,", js)
+        self.assertIn("start_corner: startCorner,", js)
+        self.assertIn("startCorner = currentData.wall.start_corner", js)
+        self.assertIn("startCornerInput.addEventListener('change'", js)
 
     def test_start_label_is_no_longer_hardcoded_to_the_origin(self):
         self.assertNotIn("START (0,0)", read("static", "app.js"))
