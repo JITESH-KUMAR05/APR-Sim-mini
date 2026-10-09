@@ -6,6 +6,7 @@ Pair-programmed for presentation & engineering demonstration.
 
 import os
 import io
+import json
 import base64
 import time
 import zipfile
@@ -15,9 +16,10 @@ from flask import Flask, render_template, request, jsonify, send_file, send_from
 from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from geometry_engine import GeometryEngine
+from geometry_engine import DEFAULT_START_CORNER, GeometryEngine
 from cad_exporter import CADExporter
 from obstacle_detector import load_default_detector
+from rover_mission import compile_rover_mission, load_profile
 
 # Define absolute paths for static assets and templates (vital for Vercel/serverless environments)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,6 +45,7 @@ def handle_request_too_large(_error):
 
 geometry_engine = GeometryEngine(detector=load_default_detector())
 cad_exporter = CADExporter()
+ROVER_PROFILE = load_profile()
 
 # In-memory cached active state for immediate downloads
 current_session = {
@@ -110,10 +113,11 @@ def count_unverified(obstacles):
     return sum(1 for obs in obstacles if obs.get("type") == "unverified")
 
 
-def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles):
+def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+                  start_corner=DEFAULT_START_CORNER):
     """Plan coverage, compute metrics, write every export file and refresh the session cache."""
     waypoints, path_stats = geometry_engine.plan_coverage_path(
-        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
+        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
     )
     metrics = geometry_engine.compute_metrics(wall_w_mm, wall_h_mm, obstacles, path_stats)
 
@@ -136,7 +140,14 @@ def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buff
         zf.write(obj_path, arcname="paintpilot_wall.obj")
         zf.write(mtl_path, arcname="paintpilot_wall.mtl")
 
-    mission_json = cad_exporter.export_mission_json(wall_w_mm, wall_h_mm, obstacles, waypoints, metrics)
+    mission_json = cad_exporter.export_mission_json(
+        wall_w_mm, wall_h_mm, obstacles, waypoints, metrics,
+        spray_width_mm=spray_width_mm,
+        overlap_pct=overlap_pct,
+        safety_buffer_mm=safety_buffer_mm,
+        speed_mps=metrics["nominal_speed_mps"],
+        start_corner=start_corner,
+    )
     json_path = os.path.join(EXPORTS_DIR, "apr_mission_manifest.json")
     with open(json_path, "w", encoding="utf-8") as f:
         f.write(mission_json)
@@ -146,6 +157,13 @@ def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buff
     with open(csv_path, "w", encoding="utf-8") as f:
         f.write(motion_csv)
 
+    rover_mission = compile_rover_mission(
+        waypoints, wall_w_mm, wall_h_mm, spray_width_mm, path_stats["effective_step_mm"], start_corner, ROVER_PROFILE
+    )
+    rover_path = os.path.join(EXPORTS_DIR, "apr_rover_mission.json")
+    with open(rover_path, "w", encoding="utf-8") as f:
+        json.dump(rover_mission, f, indent=2)
+
     current_session.update({
         "wall_w_mm": wall_w_mm,
         "wall_h_mm": wall_h_mm,
@@ -153,6 +171,7 @@ def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buff
         "waypoints": waypoints,
         "metrics": metrics,
         "stats": path_stats,
+        "start_corner": start_corner,
     })
     return waypoints, path_stats, metrics
 
@@ -173,6 +192,7 @@ def analyze_wall():
         safety_buffer_mm = float(request.form.get("safety_buffer_mm", 60.0))
         sensitivity = float(request.form.get("sensitivity", 0.5))
         sample_id = request.form.get("sample_id", None)
+        start_corner = geometry_engine.parse_start_corner(request.form.get("start_corner"))
 
         wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm = _sanitize_wall_params(
             wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm
@@ -220,7 +240,7 @@ def analyze_wall():
 
         # 3. Plan coverage, compute metrics, write exports
         waypoints, path_stats, metrics = build_mission(
-            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
         )
         current_session["confidence"] = confidence
 
@@ -247,7 +267,8 @@ def analyze_wall():
                 "height_mm": wall_h_mm,
                 "spray_width_mm": spray_width_mm,
                 "overlap_pct": overlap_pct,
-                "safety_buffer_mm": safety_buffer_mm
+                "safety_buffer_mm": safety_buffer_mm,
+                "start_corner": start_corner
             },
             "obstacles": obstacles,
             "waypoints": waypoints,
@@ -284,9 +305,10 @@ def replan():
             float(payload["safety_buffer_mm"]),
         )
         obstacles = geometry_engine.normalize_obstacles(payload.get("obstacles"), wall_w_mm, wall_h_mm)
+        start_corner = geometry_engine.parse_start_corner(payload.get("start_corner"))
 
         waypoints, path_stats, metrics = build_mission(
-            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
         )
         return jsonify({
             "success": True,
@@ -314,7 +336,8 @@ def download_file(file_type):
         "mtl": ("paintpilot_wall.mtl", "text/plain", "paintpilot_wall.mtl"),
         "zip": ("paintpilot_wall_3d_bundle.zip", "application/zip", "paintpilot_wall_3d_bundle.zip"),
         "json": ("apr_mission_manifest.json", "application/json", "apr_mission_manifest.json"),
-        "csv": ("apr_waypoints.csv", "text/csv", "apr_waypoints.csv")
+        "csv": ("apr_waypoints.csv", "text/csv", "apr_waypoints.csv"),
+        "rover": ("apr_rover_mission.json", "application/json", "apr_rover_mission.json")
     }
 
     if file_type not in file_map:

@@ -7,8 +7,9 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import app as app_module
-from fakes import FakeDetector
+from fakes import FakeDetector, planner_moves
 from obstacle_detector import Detection
+from rover_mission import replay_rover_mission, verify_checksum
 
 FORM = {
     "width_mm": "4000", "height_mm": "2800", "spray_width_mm": "250",
@@ -191,6 +192,78 @@ class TestRequestTooLarge(unittest.TestCase):
         )
         self.assertEqual(res.status_code, 413)
         self.assertFalse(json.loads(res.data)["success"])
+
+
+class TestStartCornerAndRoverMission(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.client = app_module.app.test_client()
+
+    def analyze(self, detections=(), **extra):
+        with mock.patch.object(app_module.geometry_engine, "detector", FakeDetector(list(detections))):
+            return self.client.post("/api/analyze", data={**FORM, **extra})
+
+    def download_json(self, kind):
+        res = self.client.get(f"/api/download/{kind}")
+        try:
+            return json.loads(res.data)
+        finally:
+            res.close()
+
+    def test_default_start_is_bottom_left(self):
+        data = json.loads(self.analyze().data)
+        first = data["waypoints"][0]
+        self.assertEqual(data["wall"]["start_corner"], "bottom_left")
+        self.assertEqual((first["x"], first["y"]), (0.0, 125.0))
+
+    def test_top_right_start(self):
+        data = json.loads(self.analyze(start_corner="top_right").data)
+        first = data["waypoints"][0]
+        self.assertEqual(data["wall"]["start_corner"], "top_right")
+        self.assertEqual((first["x"], first["y"]), (4000.0, 2675.0))
+
+    def test_bad_start_corner_is_a_400(self):
+        res = self.analyze(start_corner="middle")
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(json.loads(res.data)["success"])
+
+    def test_rover_mission_download_replays_to_the_response_waypoints(self):
+        data = json.loads(self.analyze(
+            detections=[Detection("window", 0.9, 100, 100, 400, 400)], start_corner="bottom_right"
+        ).data)
+        mission = self.download_json("rover")
+        self.assertTrue(verify_checksum(mission))
+        self.assertEqual(mission["wall"]["start_corner"], "bottom_right")
+        expected = planner_moves(data["waypoints"])
+        actual = replay_rover_mission(mission)["moves"]
+        self.assertEqual(len(actual), len(expected))
+        for (e_start, e_end, e_spray), (a_start, a_end, a_spray) in zip(expected, actual):
+            self.assertEqual(e_spray, a_spray)
+            self.assertAlmostEqual(e_end[0], a_end[0], delta=0.01)
+            self.assertAlmostEqual(e_end[1], a_end[1], delta=0.01)
+
+    def test_exports_use_the_requested_spray_settings(self):
+        self.analyze(
+            detections=[Detection("window", 0.9, 100, 100, 400, 400)],
+            spray_width_mm="300", overlap_pct="20", safety_buffer_mm="90", start_corner="top_left",
+        )
+        manifest = self.download_json("json")
+        self.assertEqual(manifest["spray_parameters"]["spray_width_mm"], 300.0)
+        self.assertEqual(manifest["spray_parameters"]["overlap_pct"], 20.0)
+        self.assertEqual(manifest["coverage"]["start_corner"], "top_left")
+        self.assertEqual(manifest["no_paint_obstacles"][0]["safety_buffer_mm"], 90.0)
+        self.assertEqual(self.download_json("rover")["spray"]["width_mm"], 300.0)
+
+    def test_replan_honours_the_start_corner_and_defaults_to_bottom_left(self):
+        with_corner = self.client.post("/api/replan", json={**WALL, "obstacles": [], "start_corner": "top_right"})
+        self.assertEqual(json.loads(with_corner.data)["waypoints"][0]["x"], 4000.0)
+
+        default = json.loads(self.client.post("/api/replan", json={**WALL, "obstacles": []}).data)
+        self.assertEqual((default["waypoints"][0]["x"], default["waypoints"][0]["y"]), (0.0, 125.0))
+
+        bad = self.client.post("/api/replan", json={**WALL, "obstacles": [], "start_corner": "middle"})
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(self.download_json("rover")["wall"]["start_corner"], "bottom_left")
 
 
 if __name__ == "__main__":
