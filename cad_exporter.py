@@ -372,7 +372,13 @@ class CADExporter:
         wall_h_mm: float,
         obstacles: List[Dict[str, Any]],
         waypoints: List[Dict[str, Any]],
-        metrics: Dict[str, Any]
+        metrics: Dict[str, Any],
+        *,
+        spray_width_mm: float = 250.0,
+        overlap_pct: float = 12.0,
+        safety_buffer_mm: float = 60.0,
+        speed_mps: float = 0.25,
+        start_corner: str = "bottom_left"
     ) -> str:
         """
         Generate ROS 2 / APR Mission Planner execution manifest JSON schema.
@@ -397,10 +403,14 @@ class CADExporter:
                 "net_paintable_area_m2": metrics.get("net_paintable_area_m2"),
                 "masked_area_m2": metrics.get("masked_area_m2")
             },
+            "coverage": {
+                "start_corner": start_corner
+            },
             "spray_parameters": {
-                "spray_width_mm": 250.0,
+                "spray_width_mm": spray_width_mm,
+                "overlap_pct": overlap_pct,
                 "target_dft_um": 50.0,
-                "nominal_speed_mps": 0.25,
+                "nominal_speed_mps": speed_mps,
                 "estimated_paint_liters": metrics.get("paint_volume_liters"),
                 "estimated_cycle_time": metrics.get("cycle_time_formatted")
             },
@@ -410,7 +420,7 @@ class CADExporter:
                     "type": o["type"],
                     "label": o["label"],
                     "bounding_box_mm": {"x": o["x"], "y": o["y"], "width": o["w"], "height": o["h"]},
-                    "safety_buffer_mm": 60.0
+                    "safety_buffer_mm": safety_buffer_mm
                 }
                 for o in obstacles
             ],
