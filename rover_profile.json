@@ -1,0 +1,7 @@
+{
+  "schema": "apr-rover-profile/1",
+  "name": "apr-floor-demo",
+  "drive": "differential-turn-in-place",
+  "wheel_diameter_mm": 80.0,
+  "max_speed_mps": 0.25
+}
