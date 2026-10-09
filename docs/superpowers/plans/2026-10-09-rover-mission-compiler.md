@@ -271,6 +271,7 @@ git log -1 --format='%(trailers:key=Co-Authored-By)'
 
 **Files:**
 - Create: `rover_profile.json`, `rover_mission.py`
+- Modify: `tests/fakes.py` (shared `planner_moves` helper, also used by `tests/test_api.py` in Task 4)
 - Test: `tests/test_rover_mission.py`
 
 **Interfaces:**
@@ -291,14 +292,27 @@ Create `rover_profile.json`. The 80 mm wheel and 0.25 m/s come from section 4 of
 }
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [ ] **Step 2: Add the shared test helper, then write the failing tests**
+
+In `tests/fakes.py`, add `import math` as the first line (the file has no imports yet, leave a blank line after it) and append at the end of the file:
+
+```python
+
+
+def planner_moves(waypoints):
+    """The motion segments of a planner path as ((x0, y0), (x1, y1), spray): zero-length join points are skipped."""
+    moves = []
+    for p, q in zip(waypoints, waypoints[1:]):
+        if math.hypot(q["x"] - p["x"], q["y"] - p["y"]) > 0.5:
+            moves.append(((p["x"], p["y"]), (q["x"], q["y"]), bool(p["spray_active"] and q["spray_active"])))
+    return moves
+```
 
 Create `tests/test_rover_mission.py`:
 
 ```python
 import copy
 import json
-import math
 import os
 import sys
 import tempfile
@@ -306,6 +320,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from fakes import planner_moves
 from geometry_engine import START_CORNERS, GeometryEngine
 from rover_mission import SCHEMA, compile_rover_mission, load_profile, replay_rover_mission, verify_checksum
 
@@ -320,14 +335,6 @@ def plan_and_compile(corner, obstacles=()):
     waypoints, stats = GeometryEngine().plan_coverage_path(WALL, WALL, 250.0, 12.0, 60.0, list(obstacles), corner)
     mission = compile_rover_mission(waypoints, WALL, WALL, 250.0, stats["effective_step_mm"], corner, load_profile())
     return waypoints, stats, mission
-
-
-def planner_moves(waypoints):
-    moves = []
-    for p, q in zip(waypoints, waypoints[1:]):
-        if math.hypot(q["x"] - p["x"], q["y"] - p["y"]) > 0.5:
-            moves.append(((p["x"], p["y"]), (q["x"], q["y"]), bool(p["spray_active"] and q["spray_active"])))
-    return moves
 
 
 def write_profile(tmp, **overrides):
@@ -621,7 +628,7 @@ Expected: all PASS, 1 skipped.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add rover_profile.json rover_mission.py tests/test_rover_mission.py
+git add rover_profile.json rover_mission.py tests/fakes.py tests/test_rover_mission.py
 git commit -m "Add rover profile and mission compiler" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 git log -1 --format='%(trailers:key=Co-Authored-By)'
 ```
@@ -781,25 +788,15 @@ git log -1 --format='%(trailers:key=Co-Authored-By)'
 
 - [ ] **Step 1: Write the failing tests**
 
-In `tests/test_api.py`, add to the imports at the top (below `from obstacle_detector import Detection`):
+In `tests/test_api.py`, change the existing line `from fakes import FakeDetector` to `from fakes import FakeDetector, planner_moves`, and add below `from obstacle_detector import Detection`:
 
 ```python
-import math
-
 from rover_mission import replay_rover_mission, verify_checksum
 ```
 
 Append before `if __name__ == "__main__":`:
 
 ```python
-def planner_moves(waypoints):
-    moves = []
-    for p, q in zip(waypoints, waypoints[1:]):
-        if math.hypot(q["x"] - p["x"], q["y"] - p["y"]) > 0.5:
-            moves.append(((p["x"], p["y"]), (q["x"], q["y"]), bool(p["spray_active"] and q["spray_active"])))
-    return moves
-
-
 class TestStartCornerAndRoverMission(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
