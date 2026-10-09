@@ -59,15 +59,15 @@ Invariants:
 
 Current exports are absolute waypoints (x, y, spray flag) in a wall frame with origin bottom-left, and the planner starts at the top row. A rover cannot execute that directly.
 
-1. **Operator-chosen start.** `plan_coverage_path` gains `start_corner` (any of the four wall corners, default bottom-left, the rover's (0,0)) and `row_order` (bottom-up or top-down, default bottom-up). The operator picks them in the app per wall and conditions, places the rover there, and the planner builds the path from that start. Top-down avoids drips on fresh paint on a vertical wall, which is one reason the choice is per job. No trained model decides the start: that keeps the frozen rule that AI never decides motion. A deterministic "suggest a start" heuristic (for example fewest transit metres) can be added later and would still only suggest.
+1. **Operator-chosen start.** `plan_coverage_path` gains `start_corner`, one of the four wall corners (default `bottom_left`, the rover's (0,0)). The corner fixes both the side the first pass starts from and the direction rows progress: rows move away from the start side, so a bottom corner paints bottom-up and a top corner paints top-down. Top-down avoids drips on fresh paint on a vertical wall, which is one reason the choice is per job. The operator picks the corner in the app, places the rover there, and the planner builds the path from that start. No trained model decides the start: that keeps the frozen rule that AI never decides motion. A deterministic "suggest a start" heuristic (for example fewest transit metres) can be added later and would still only suggest.
 2. **Rover mission export, `apr-rover-mission/1` (JSON).** A new module `rover_mission.py` compiles waypoints into primitives:
    - `MOVE <mm>` with a spray flag
    - `TURN <deg>` (on the spot, skid-steer or differential)
    - `EDGE_ALIGN` at row ends, to re-zero one coordinate against the wall edge
-   - Each step carries the expected (x, y) after it, for comparing planned and real position. The file has a header (wall size, spray width, row pitch, speed, paint estimate) and a checksum.
-3. **`rover_profile.json`.** Wheel diameter, ticks per revolution, wheelbase, max speed, pump maximum continuous run time. The compiler and firmware both read it.
+   - Each step carries the expected (x, y) after it, for comparing planned and real position. The file has a header (wall size, start corner, spray width, row pitch, speed, the rover profile) and a checksum. The paint estimate stays in the existing mission manifest JSON.
+3. **`rover_profile.json`.** Constants shared by the compiler and the firmware. P1 ships the wheel diameter and max speed. P2 adds ticks per revolution, wheelbase and the pump's maximum continuous run time once the parts are chosen.
 4. **Honest parameters.** The exports use the request's real spray width, overlap and speed. Today the manifest hardcodes 250 mm and 0.25 m/s.
-5. Existing DXF, OBJ, CSV and JSON exports are unchanged. The 2D map gets a rover-path overlay. `static/rover_sim.js` plays the compiled primitives so the preview matches what the rover receives.
+5. Existing DXF, OBJ, CSV and JSON exports are unchanged apart from the honest parameters in item 4. The 2D map's start marker shows the real start position. The simulation keeps playing the planner's waypoints. A replay test proves that the compiled rover steps reproduce those waypoints within 0.01 mm, so the preview matches what the rover receives without a second playback path in `static/rover_sim.js`.
 
 For the 8 x 8 ft wall the current planner gives 12 rows, row pitch 220 mm (250 mm spray width, 12% overlap), 31.45 m of path and about 2:47 cycle time at 0.25 m/s.
 
@@ -116,7 +116,7 @@ These are sizing guidance, not a finished parts list. A diaphragm pump gives low
 
 | Plan | Content | Hardware needed |
 |---|---|---|
-| P1 | Planner start corner and row order, `rover_profile.json`, `rover_mission.py`, new export, simulator playback, honest export parameters | None. Can start immediately. |
+| P1 | Planner start corner, `rover_profile.json`, `rover_mission.py`, new export, start-corner dropdown, honest export parameters | None. Can start immediately. |
 | P2 | Arduino firmware and serial protocol: safety state machine, motion, pump and valve, `docs/rover-protocol.md` | Bench only |
 | P3 | Pi agent and the Rover console in the app | Pi |
 | P4 | Vertical wall: adhesion, tracks, fall-arrest tether, payload. Separate spec and safety review. | Yes |
