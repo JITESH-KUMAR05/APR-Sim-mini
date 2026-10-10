@@ -11,3 +11,4 @@ exports/*
 training/data/
 training/runs/
 *.pt
+rover/sim/build/

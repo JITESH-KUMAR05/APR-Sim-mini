@@ -17,11 +17,14 @@ File contract
 
 - x_mm/y_mm and start_pose are the position of the spray nozzle centre in the wall frame.
   start_pose is where the operator places the rover (nozzle centre) and the direction it faces.
-- EDGE_ALIGN: the rover drives slowly along its current heading until its edge sensor triggers
-  (firmware faults if it does not trigger within a firmware-defined distance), then sets the
-  coordinate on `axis` to value_mm. The step's own x_mm/y_mm are the expected pose BEFORE that
-  reset. The offset between the edge sensor and the nozzle centre belongs to the rover profile
-  (added in plan P2).
+- EDGE_ALIGN: the rover drives slowly along its current heading until its edge sensors trigger
+  (firmware faults EDGE_NOT_FOUND if they do not trigger within 150 mm plus 5% of the wall size
+  along the search axis, and EDGE_MISMATCH if the contact is more than 150 mm beyond that
+  distance from the estimate or needs more than 10 degrees of heading correction), then sets the
+  coordinate on `axis` to value_mm. Pushing into the edge with both sensors squares the rover to it, so its heading is
+  also reset to the nominal heading. That resets gyro drift once per row. The step's own
+  x_mm/y_mm are the expected pose BEFORE that reset. The offset between the edge sensors and the
+  nozzle centre is a rover constant, added with the real hardware in plan P2b.
 - speed_mps is the speed MOVE steps are driven at, spray on or off, and equals the profile's
   max_speed_mps.
 - Obstacles are no-paint zones, not no-go zones: a MOVE with spray 0 may cross a keep-out box,
@@ -29,8 +32,9 @@ File contract
 - Checksum: sha256 (hex) of the UTF-8 bytes of Python
   json.dumps(body, sort_keys=True, separators=(",", ":")), where body is the mission dict without
   its `checksum` key. Float text is Python's repr (for example 0.0, 90.0), so a verifier in
-  another language must reproduce that formatting. A language-neutral canonical form is to be
-  decided in the P2 spec, while the schema is still /1 with no consumers.
+  another language must reproduce that formatting. Only Python code verifies it today (the host
+  tool, and the Pi agent in plan P3); a language-neutral canonical form is needed only if a
+  non-Python verifier appears.
 """
 
 import hashlib
@@ -51,8 +55,10 @@ def load_profile(path: str = DEFAULT_PROFILE_PATH) -> Dict[str, Any]:
         profile = json.load(f)
     if not isinstance(profile, dict) or profile.get("schema") != PROFILE_SCHEMA:
         raise ValueError(f"rover profile must have schema {PROFILE_SCHEMA}")
-    for key in ("wheel_diameter_mm", "max_speed_mps"):
+    for key, required in (("wheel_diameter_mm", True), ("max_speed_mps", True), ("pump_max_continuous_s", False)):
         value = profile.get(key)
+        if value is None and not required:
+            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"rover profile {key} must be a positive number")
     if profile["max_speed_mps"] > 0.5:

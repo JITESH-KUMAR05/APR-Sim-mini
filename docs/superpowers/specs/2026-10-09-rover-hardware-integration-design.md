@@ -93,7 +93,7 @@ Pose comes from wheel encoders plus a gyro, starting at the mission's start_pose
 
 - Each row ends with `EDGE_ALIGN`: the rover touches the wall edge with a bumper switch (or distance sensor) and resets that coordinate.
 - On the floor the painted stripes are the measurement.
-- Stage A targets, proposed and to be confirmed after Stage 1: row-to-row error within 30 mm, end position within 50 mm, heading within 2 degrees over a row.
+- Stage A targets, proposed and to be confirmed after Stage 1: row-to-row error within 30 mm and heading within 2 degrees over a row (both met in the simulator at 3% wheel slip), and x within 5 mm at every row end. Absolute end position in y is not on this list: nothing re-references y, so it drifts by about the slip times the vertical distance driven (about 65 mm for 3% slip on an 8 ft wall) until a y reference exists (see the firmware spec).
 
 ## 4. First-pass hardware sizing (Stage A, floor)
 
