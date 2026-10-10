@@ -97,6 +97,18 @@ class TestSetupAndRefusals(SimTestCase):
         self.assertEqual(words(t.send("POSE -50.1 0.0 0.0")), ["NAK 0 BADARG"])
         self.assertEqual(words(t.send("POSE 0.0 550.1 0.0")), ["NAK 0 BADARG"])
 
+    def test_a_refused_pose_cannot_be_armed(self):
+        t = self.sim()
+        t.send("HELLO")
+        t.send("WALL 500.0 500.0")
+        t.send("SPEED 100.0")
+        self.assertEqual(words(t.send("POSE 100.0 100.0 0.0")), ["ACK 0"])
+        # A host that ignores this NAK must not be able to ARM on the older pose.
+        self.assertEqual(words(t.send("POSE 600.0 125.0 0.0")), ["NAK 0 BADARG"])
+        self.assertEqual(words(t.send("ARM")), ["NAK 0 BADSTATE"])
+        self.assertEqual(words(t.send("POSE 200.0 100.0 0.0")), ["ACK 0"])
+        self.assertEqual(words(t.send("ARM")), ["ACK 0", "STATE ARMED"])
+
     def test_a_wall_that_leaves_the_pose_outside_is_refused_and_the_old_wall_stays(self):
         t = self.sim()
         t.send("HELLO")

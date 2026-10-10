@@ -27,7 +27,8 @@ const float kAccelMmS2 = 150.0f;
 const float kMinMoveSpeedMmS = 25.0f;      // creep speed at the end of a MOVE
 const float kStopToleranceMm = 1.0f;
 const float kEdgeSpeedMmS = 30.0f;
-const float kEdgeSearchMm = 150.0f;
+const float kEdgeSearchBaseMm = 150.0f;        // EDGE gives up after this plus kEdgeSearchWallFraction of the wall
+const float kEdgeSearchWallFraction = 0.05f;   // along the search axis (wheel slip over a long row grows with the row)
 
 // Turning
 const float kTurnRateDegS = 60.0f;
@@ -54,12 +55,12 @@ const uint32_t kPumpMaxMs = 30000;
 const int kPumpMaxSeconds = 30;
 const float kMoveMarginMm = 100.0f;        // MOVE longer than max(wall) + this is TOO_LONG
 const uint32_t kPumpAllowanceMs = 2000;    // a spray MOVE is TOO_LONG if its travel time plus this exceeds kPumpMaxMs
-                                           // (covers the speed ramp, the creep at the end and the valve delay)
+                                           // (covers the speed ramp and the creep at the end; kValveOpenDelayMs is added separately)
 
 // EDGE requests and the correction an edge contact may apply
 const float kEdgeFacingCos = 0.7f;               // the rover must face the edge this squarely (cosine of the angle)
 const float kEdgeAxisTolMm = 1.0f;               // the requested edge value may differ this much from the wall edge
-const float kEdgeMaxCorrectionMm = 300.0f;       // larger position correction at contact: FAULT EDGE_MISMATCH
+const float kEdgeMismatchExtraMm = 150.0f;       // a contact more than the search distance plus this from the estimate: FAULT EDGE_MISMATCH
 const float kEdgeMaxHeadingCorrectionDeg = 10.0f;  // larger heading correction at contact: FAULT EDGE_MISMATCH
 
 // Spray timing, calibrated in Stage 2 of the integration design

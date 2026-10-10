@@ -144,14 +144,29 @@ class TestEdge(SimTestCase):
         self.assertEqual(done_pose(lines)[0], 2438.4)
         self.assertAlmostEqual(t.truth()["x"], 2438.4, delta=0.1)
 
+    def test_edge_search_scales_with_the_wall(self):
+        # On a 4 m wall, a full row with 5% slip ends about 190 mm short of the edge: more than the
+        # old fixed 150 mm search, within the 150 mm + 5% of the wall = 350 mm the search now allows.
+        t = self.sim("--start", "0", "125", "0", "--wall", "4000", "4000", "--slip", "0.05", "--seed", "5")
+        self.arm(t, wall=(4000.0, 4000.0))
+        self.run_step(t, "MOVE 1 4000.0 0")
+        lines, _ = self.run_step(t, "EDGE 2 x 4000.0")
+        self.assertFalse(any(line.startswith("FAULT") for line in lines), lines)
+        self.assertEqual(words(lines)[-2:][1], "STATE ARMED")
+        self.assertTrue(words(lines)[-2].startswith("DONE 2 "), lines)
+
 
 class TestEdgeSensor(SimTestCase):
     def test_edge_ignores_an_edge_behind_the_rover(self):
         # The rover faces east at x = 0: the nearby boundary is behind it and must not count as contact.
         t = self.sim("--start", "0", "125", "0")
         self.arm(t)
-        lines, _ = self.run_step(t, "EDGE 1 x 2438.4")
+        lines, elapsed = self.run_step(t, "EDGE 1 x 2438.4")
         self.assertEqual(words(lines)[-2:], ["FAULT EDGE_NOT_FOUND", "STATE FAULT"])
+        # It gives up after 150 mm + 5% of the 2438.4 mm wall = 271.9 mm of search.
+        self.assertAlmostEqual(t.truth()["x"], 271.9, delta=15.0)
+        # The search runs at 30 mm/s, so about 9.1 s; the step timeout (2 x that + 2 s = 20.1 s) was not what ended it.
+        self.assertAlmostEqual(elapsed, 271.9 / 30.0 * 1000.0, delta=1000.0)
 
 
 class TestEdgeRequests(SimTestCase):

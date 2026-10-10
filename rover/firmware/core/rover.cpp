@@ -158,6 +158,7 @@ void Rover::handleLine(const char* line) {
         speedSet_ = true;
       } else {
         if (wallSet_ && !poseInsideWall(message.a, message.b, wallWTenths_, wallHTenths_)) {
+          poseSet_ = false;  // a host that ignores this NAK must not be able to ARM on an older pose
           emitNak(0, "BADARG");
           return;
         }
@@ -192,9 +193,10 @@ void Rover::handleLine(const char* line) {
         int32_t longestTenths = wallWTenths_ > wallHTenths_ ? wallWTenths_ : wallHTenths_;
         int32_t marginTenths = (int32_t)(cfg::kMoveMarginMm * 10.0f);
         float seconds = fromTenths(message.a) / fromTenths(speedTenths_);
-        // The pump time of a spray MOVE is its travel time plus an allowance for the ramp and the creep.
+        // The pump time of a spray MOVE is its travel time, the valve-open delay, and an allowance for the ramp and the creep.
         if (message.a > longestTenths + marginTenths ||
-            (message.b == 1 && seconds * 1000.0f + (float)cfg::kPumpAllowanceMs > (float)cfg::kPumpMaxMs)) {
+            (message.b == 1 &&
+             seconds * 1000.0f + (float)cfg::kPumpAllowanceMs + (float)cfg::kValveOpenDelayMs > (float)cfg::kPumpMaxMs)) {
           emitNak(message.id, "TOO_LONG");
           return;
         }

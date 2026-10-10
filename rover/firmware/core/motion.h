@@ -72,6 +72,7 @@ class Motion {
   float nominalHeading_, headingIntegral_;  // nominal = pose heading plus every commanded turn
   char edgeAxis_;
   float edgeValue_;
+  float edgeSearchMm_;
   bool spray_, sprayOpen_;
   int settledTicks_;
   uint32_t waitUntilMs_;

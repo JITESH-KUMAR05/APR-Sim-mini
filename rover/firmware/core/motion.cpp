@@ -20,7 +20,7 @@ Motion::Motion(Hal& hal)
       leftMeasured_(0), rightMeasured_(0), leftIntegral_(0), rightIntegral_(0),
       targetMm_(0), traveled_(0), vCmd_(0), holdHeading_(0), targetHeading_(0), rateCmd_(0),
       nominalHeading_(0), headingIntegral_(0),
-      edgeAxis_('x'), edgeValue_(0), spray_(false), sprayOpen_(false), settledTicks_(0), waitUntilMs_(0),
+      edgeAxis_('x'), edgeValue_(0), edgeSearchMm_(cfg::kEdgeSearchBaseMm), spray_(false), sprayOpen_(false), settledTicks_(0), waitUntilMs_(0),
       runMs_(0), timeoutMs_(0), pumpOnSinceMs_(0), pumpOn_(false), stallWindowMs_(0), stallMotionMm_(0) {}
 
 void Motion::setWall(float widthMm, float heightMm) {
@@ -176,7 +176,8 @@ void Motion::startEdge(char axis, float valueMm) {
   holdHeading_ = nominalHeading_;
   headingIntegral_ = 0;
   runMs_ = 0;
-  timeoutMs_ = (uint32_t)(2.0f * (cfg::kEdgeSearchMm / cfg::kEdgeSpeedMmS) * 1000.0f) + 2000;
+  edgeSearchMm_ = cfg::kEdgeSearchBaseMm + cfg::kEdgeSearchWallFraction * (axis == 'x' ? wallW_ : wallH_);
+  timeoutMs_ = (uint32_t)(2.0f * (edgeSearchMm_ / cfg::kEdgeSpeedMmS) * 1000.0f) + 2000;
   resetStall(stallWindowMs_, stallMotionMm_);
 }
 
@@ -303,7 +304,7 @@ Motion::Event Motion::tick() {
     // A contact far from where the estimate said, or one that turns the rover a lot, means the
     // rover is not where it thinks it is: report it instead of silently rewriting the pose.
     float estimate = edgeAxis_ == 'x' ? x_ : y_;
-    if (fabsf(estimate - edgeValue_) > cfg::kEdgeMaxCorrectionMm ||
+    if (fabsf(estimate - edgeValue_) > edgeSearchMm_ + cfg::kEdgeMismatchExtraMm ||
         fabsf(heading_ - nominalHeading_) > cfg::kEdgeMaxHeadingCorrectionDeg) {
       return raise(FAULT_EDGE_MISMATCH);
     }
@@ -314,7 +315,7 @@ Motion::Event Motion::tick() {
     return finish();
   }
   traveled_ += mean;
-  if (traveled_ > cfg::kEdgeSearchMm) return raise(FAULT_EDGE_NOT_FOUND);
+  if (traveled_ > edgeSearchMm_) return raise(FAULT_EDGE_NOT_FOUND);
   float error = holdHeading_ - heading_;
   if (fabsf(error) > cfg::kHeadingFaultDeg) return raise(FAULT_HEADING);
   float trim = headingTrim(error);
