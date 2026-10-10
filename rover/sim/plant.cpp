@@ -39,8 +39,13 @@ void Plant::setValve(bool open) {
 }
 
 bool Plant::edgeContact() {
+  // Front-facing, like the real sensors: contact only with the boundary the rover is facing and touching.
+  // (The true heading decides here; the firmware only sees the sensor.)
   const float eps = 0.01f;
-  return x_ <= eps || x_ >= options_.wallWidthMm - eps || y_ <= eps || y_ >= options_.wallHeightMm - eps;
+  float c = cosf(headingDeg_ * kDegToRad);
+  float s = sinf(headingDeg_ * kDegToRad);
+  return (x_ <= eps && c < -0.3f) || (x_ >= options_.wallWidthMm - eps && c > 0.3f) ||
+         (y_ <= eps && s < -0.3f) || (y_ >= options_.wallHeightMm - eps && s > 0.3f);
 }
 
 void Plant::step(uint32_t dtMs) {
@@ -70,6 +75,8 @@ void Plant::step(uint32_t dtMs) {
   if (newY < 0) { newY = 0; hitY = true; }
   if (newY > options_.wallHeightMm) { newY = options_.wallHeightMm; hitY = true; }
   // Pushing into an edge with both bumpers squares the rover to it.
+  // NOTE: the instant squaring below is an idealisation. On the real rover the first bumper to touch
+  // fights the heading hold before the second one does; plan P2b must check what really happens.
   // (only when the rover is really driving into that edge, not sliding along it or turning on the spot)
   bool driving = fabsf(speed) > 15.0f;
   if (driving && hitX && fabsf(cosf(headingDeg_ * kDegToRad)) > 0.7f) headingDeg_ = 180.0f * roundf(headingDeg_ / 180.0f);

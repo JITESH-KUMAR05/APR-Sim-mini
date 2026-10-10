@@ -56,6 +56,16 @@ int main(int argc, char** argv) {
   char line[256];
   while (fgets(line, sizeof(line), stdin)) {
     size_t length = strlen(line);
+    // A line longer than the buffer must not be split into two commands: discard the rest of it and
+    // give the core an empty line (which it answers with NAK 0 BADCRC).
+    bool tooLong = length == sizeof(line) - 1 && line[length - 1] != '\n';
+    if (tooLong) {
+      int c;
+      while ((c = getchar()) != EOF && c != '\n') {
+      }
+      line[0] = '\0';
+      length = 0;
+    }
     while (length > 0 && (line[length - 1] == '\n' || line[length - 1] == '\r')) line[--length] = '\0';
 
     if (line[0] == '@') {
@@ -78,7 +88,7 @@ int main(int argc, char** argv) {
       } else {
         printf("@ERR unknown simulator command\n");
       }
-    } else if (length > 0) {
+    } else if (length > 0 || tooLong) {
       rover.handleLine(line);
     }
     printf("@END\n");

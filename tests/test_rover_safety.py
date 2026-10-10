@@ -51,6 +51,11 @@ class TestSetupAndRefusals(SimTestCase):
         self.assertEqual(words(t.send("EDGE 5 q 1.0")), ["NAK 5 BADARG"])
         self.assertEqual(words(t.advance(100)), [])  # still ARMED, nothing started
 
+    def test_a_line_longer_than_the_simulator_buffer_is_one_bad_command(self):
+        t = self.sim()
+        self.assertEqual(words(t.send_raw("PING " + "x" * 400)), ["NAK 0 BADCRC"])  # not split into two commands
+        self.assertEqual(words(t.send("PING")), ["PONG"])
+
     def test_speed_above_the_firmware_maximum_is_refused(self):
         t = self.sim()
         t.send("HELLO")
@@ -67,6 +72,43 @@ class TestSetupAndRefusals(SimTestCase):
         self.arm(t, wall=(4000.0, 4000.0), speed=100.0)
         self.assertEqual(words(t.send("MOVE 1 3100.0 1")), ["NAK 1 TOO_LONG"])  # 31 s of pump at 100 mm/s
         self.assertEqual(words(t.send("MOVE 2 3100.0 0"))[0], "ACK 2")       # same distance without spray is fine
+
+        # 28 s of travel plus the 2 s allowance for the ramp and the creep is exactly the 30 s pump limit:
+        # accepted; a little more is not.
+        t = self.sim()
+        self.arm(t, wall=(4000.0, 4000.0), speed=100.0)
+        self.assertEqual(words(t.send("MOVE 1 2810.0 1")), ["NAK 1 TOO_LONG"])
+        self.assertEqual(words(t.send("MOVE 2 2800.0 1"))[0], "ACK 2")
+
+    def test_speed_below_the_minimum_is_refused(self):
+        # Below 25 mm/s the stall detector (which needs a 20 mm/s command) would be blind.
+        t = self.sim()
+        t.send("HELLO")
+        self.assertEqual(words(t.send("SPEED 24.9")), ["NAK 0 SPEED"])
+        self.assertEqual(words(t.send("SPEED 25.0")), ["ACK 0"])
+
+    def test_pose_outside_the_wall_is_refused(self):
+        t = self.sim()
+        t.send("WALL 500.0 500.0")
+        self.assertEqual(words(t.send("POSE 600.0 125.0 0.0")), ["NAK 0 BADARG"])
+        self.assertEqual(words(t.send("POSE 550.1 125.0 0.0")), ["NAK 0 BADARG"])
+        self.assertEqual(words(t.send("POSE 550.0 125.0 0.0")), ["ACK 0"])  # exactly the margin outside is fine
+        self.assertEqual(words(t.send("POSE -50.0 -50.0 0.0")), ["ACK 0"])
+        self.assertEqual(words(t.send("POSE -50.1 0.0 0.0")), ["NAK 0 BADARG"])
+        self.assertEqual(words(t.send("POSE 0.0 550.1 0.0")), ["NAK 0 BADARG"])
+
+    def test_a_wall_that_leaves_the_pose_outside_is_refused_and_the_old_wall_stays(self):
+        t = self.sim()
+        t.send("HELLO")
+        t.send("WALL 2438.4 2438.4")
+        t.send("SPEED 250.0")
+        self.assertEqual(words(t.send("POSE 600.0 125.0 0.0")), ["ACK 0"])
+        self.assertEqual(words(t.send("WALL 500.0 500.0")), ["NAK 0 BADARG"])
+        self.assertEqual(words(t.send("ARM")), ["ACK 0", "STATE ARMED"])
+        # the old 2438.4 wall is still the one in force: 700 mm from x = 600 is not out of bounds
+        lines, _ = self.run_step(t, "MOVE 1 700.0 0")
+        self.assertTrue(any(word.startswith("DONE") for word in words(lines)), lines)
+        self.assertNotIn("FAULT OUT_OF_BOUNDS", words(lines))
 
     def test_stop_returns_to_idle_and_the_setup_must_be_repeated(self):
         t = self.sim()
@@ -116,6 +158,17 @@ class TestWatchdog(SimTestCase):
         self.assertEqual(words(self.arm(t))[-1], "STATE ARMED")
 
 
+class TestOutOfBounds(SimTestCase):
+    def test_clear_after_out_of_bounds_does_not_fault_again(self):
+        t = self.sim()
+        self.arm(t, wall=(500.0, 500.0))
+        lines, _ = self.run_step(t, "MOVE 1 600.0 0")
+        self.assertIn("FAULT OUT_OF_BOUNDS", words(lines))
+        self.assertEqual(words(t.send("CLEAR")), ["ACK 0", "STATE IDLE"])
+        self.assertEqual(t.advance(200), [])  # the stale out-of-bounds estimate must not fault again
+        self.assertEqual(words(self.arm(t, wall=(500.0, 500.0), pose=(0.0, 125.0, 0.0)))[-1], "STATE ARMED")
+
+
 class TestEstop(SimTestCase):
     def test_estop_is_a_fault_in_every_state(self):
         for name in ("IDLE", "ARMED", "RUNNING", "PAUSED"):
@@ -158,6 +211,30 @@ class TestEstop(SimTestCase):
         t.set_estop(True)
         self.assertEqual(words(t.send("ARM")), ["NAK 0 BADSTATE"])
 
+    def assert_everything_off_now(self, t):
+        truth = t.truth()
+        self.assertEqual((truth["pump"], truth["valve"], truth["duty_left"], truth["duty_right"]), (0, 0, 0, 0), truth)
+
+    def test_estop_pressed_between_polls_stops_a_new_step_and_resume(self):
+        # The e-stop goes down and a command arrives before the next tick: the command must not start anything.
+        for command in ("MOVE 1 500.0 1", "TURN 1 90.0", "EDGE 1 x 2438.4"):
+            with self.subTest(command=command):
+                t = self.sim("--start", "0", "125", "0")
+                self.arm(t)
+                t.set_estop(True)
+                self.assertEqual(words(t.send(command)), ["FAULT ESTOP", "STATE FAULT", "NAK 1 BADSTATE"])
+                self.assert_everything_off_now(t)
+
+        with self.subTest(command="RESUME"):
+            t = self.sim("--start", "0", "125", "0")
+            self.arm(t)
+            t.send("MOVE 1 1000.0 1")
+            t.advance(300)
+            t.send("PAUSE")
+            t.set_estop(True)
+            self.assertEqual(words(t.send("RESUME")), ["FAULT ESTOP", "STATE FAULT", "NAK 0 BADSTATE"])
+            self.assert_everything_off_now(t)
+
 
 class TestOutputsAreOffUnlessRunning(SimTestCase):
     def assert_everything_off(self, truth):
@@ -172,7 +249,8 @@ class TestOutputsAreOffUnlessRunning(SimTestCase):
         self.assert_everything_off(t.truth())  # ARMED
 
         t.send("MOVE 1 1000.0 1")
-        t.advance(500)
+        t.advance(300)
+        t.send("PING")  # feed the watchdog so it cannot trip anywhere near this check
         running = t.truth()
         self.assertEqual((running["pump"], running["valve"]), (1, 1))  # RUNNING with spray
         self.assertGreater(running["duty_left"], 0)
@@ -183,9 +261,37 @@ class TestOutputsAreOffUnlessRunning(SimTestCase):
 
         t.send("RESUME")
         t.advance(100)
+        t.send("PING")
         self.assertEqual(t.truth()["pump"], 1)  # RUNNING again
-        t.advance(700)  # no heartbeat: the watchdog trips while the pump is on
+
+        lines = []
+        while not any(line.startswith(("DONE", "FAULT")) for line in lines):
+            lines = t.advance(100) + t.send("PING")
+        self.assertTrue(any(line.startswith("DONE") for line in lines), lines)
+        self.assert_everything_off(t.truth())  # DONE
+
+        t.send("MOVE 2 1000.0 1")
+        t.advance(100)
+        self.assertEqual(t.truth()["pump"], 1)  # RUNNING once more
+        lines = t.advance(700)  # no heartbeat: the watchdog trips while the pump is on
+        self.assertIn("FAULT WATCHDOG", words(lines))
         self.assert_everything_off(t.truth())  # FAULT
+
+    def test_stop_while_running_or_paused_switches_everything_off(self):
+        for paused in (False, True):
+            with self.subTest(paused=paused):
+                t = self.sim("--start", "0", "125", "0")
+                self.arm(t)
+                t.send("MOVE 1 1000.0 1")
+                t.advance(300)
+                if paused:
+                    t.send("PAUSE")
+                else:
+                    self.assertEqual(t.truth()["pump"], 1)
+                self.assertEqual(words(t.send("STOP")), ["ACK 0", "STATE IDLE"])
+                self.assert_everything_off(t.truth())
+                self.assertEqual(t.advance(200), [])
+                self.assert_everything_off(t.truth())
 
 
 if __name__ == "__main__":

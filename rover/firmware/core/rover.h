@@ -28,6 +28,7 @@ class Rover {
   void setState(State state);
   void enterFault(Fault fault);
   void clearSetup();
+  bool poseInsideWall(int32_t xTenths, int32_t yTenths, int32_t wTenths, int32_t hTenths) const;
   void startStep(const proto::Message& message);
 
   Hal& hal_;
@@ -38,6 +39,7 @@ class Rover {
 
   bool helloSeen_, wallSet_, speedSet_, poseSet_;
   int32_t wallWTenths_, wallHTenths_;
+  int32_t poseXTenths_, poseYTenths_;
   int32_t speedTenths_;
   int32_t currentId_;
   uint32_t lastRxMs_;

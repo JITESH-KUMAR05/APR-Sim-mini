@@ -13,6 +13,14 @@ def done_pose(lines):
     raise AssertionError(f"no DONE in {lines}")
 
 
+def run_for(transport, ms):
+    """Let `ms` of simulated time pass in 100 ms steps, feeding the watchdog. Returns the lines (without PONG)."""
+    lines = []
+    for _ in range(ms // 100):
+        lines += transport.advance(100) + transport.send("PING")
+    return [line for line in lines if not line.startswith("PONG")]
+
+
 def heading_difference(a, b):
     return abs((a - b + 180.0) % 360.0 - 180.0)
 
@@ -137,6 +145,55 @@ class TestEdge(SimTestCase):
         self.assertAlmostEqual(t.truth()["x"], 2438.4, delta=0.1)
 
 
+class TestEdgeSensor(SimTestCase):
+    def test_edge_ignores_an_edge_behind_the_rover(self):
+        # The rover faces east at x = 0: the nearby boundary is behind it and must not count as contact.
+        t = self.sim("--start", "0", "125", "0")
+        self.arm(t)
+        lines, _ = self.run_step(t, "EDGE 1 x 2438.4")
+        self.assertEqual(words(lines)[-2:], ["FAULT EDGE_NOT_FOUND", "STATE FAULT"])
+
+
+class TestEdgeRequests(SimTestCase):
+    def reply(self, heading, command):
+        t = self.sim("--start", "1200", "2300", heading)
+        self.arm(t, pose=(1200.0, 2300.0, heading))
+        return words(t.send(command))[0]
+
+    def test_edge_needs_a_matching_axis_and_value(self):
+        cases = [
+            (90.0, "EDGE 1 x 2438.4", "NAK 1 BADARG"),  # facing north, an x edge cannot be in front
+            (90.0, "EDGE 1 y 2438.4", "ACK 1"),
+            (90.0, "EDGE 1 y 0.0", "NAK 1 BADARG"),     # that edge is behind
+            (0.0, "EDGE 1 x 500.0", "NAK 1 BADARG"),
+            (0.0, "EDGE 1 x 2439.0", "ACK 1"),          # within 1 mm of the edge in front
+            (0.0, "EDGE 1 x 2440.0", "NAK 1 BADARG"),
+            (180.0, "EDGE 1 x 0.0", "ACK 1"),
+            (180.0, "EDGE 1 x 2438.4", "NAK 1 BADARG"),
+        ]
+        for heading, command, expected in cases:
+            with self.subTest(heading=heading, command=command):
+                self.assertEqual(self.reply(heading, command), expected)
+
+
+class TestEdgeMismatch(SimTestCase):
+    def test_edge_mismatch_when_the_estimate_is_far_from_the_edge(self):
+        # The rover is really at x = 2300 but believes it is at 1000: its contact with the edge
+        # would move the estimate by more than 1 m, so something is wrong.
+        t = self.sim("--start", "2300", "125", "0")
+        self.arm(t, pose=(1000.0, 125.0, 0.0))
+        lines, _ = self.run_step(t, "EDGE 1 x 2438.4")
+        self.assertEqual(words(lines)[-2:], ["FAULT EDGE_MISMATCH", "STATE FAULT"])
+
+    def test_edge_mismatch_when_the_heading_correction_is_large(self):
+        # Really facing 12 degrees off while the pose says 0: squaring up to the edge corrects the
+        # heading by 12 degrees, more than the 10 degrees an edge contact may correct.
+        t = self.sim("--start", "2300", "125", "12")
+        self.arm(t, pose=(2300.0, 125.0, 0.0))
+        lines, _ = self.run_step(t, "EDGE 1 x 2438.4")
+        self.assertEqual(words(lines)[-2:], ["FAULT EDGE_MISMATCH", "STATE FAULT"])
+
+
 class TestSpray(SimTestCase):
     def test_no_paint_without_the_spray_flag(self):
         t = self.sim("--start", "0", "125", "0")
@@ -159,6 +216,33 @@ class TestSpray(SimTestCase):
         after = t.truth()
         self.assertEqual((after["pump"], after["valve"]), (0, 0))
         self.assertAlmostEqual(after["painted"], 500.0, delta=15.0)
+
+
+class TestSprayLimits(SimTestCase):
+    def test_spray_move_at_the_pump_limit_completes(self):
+        t = self.sim("--start", "0", "125", "0", "--wall", "4000", "4000")
+        self.arm(t, wall=(4000.0, 4000.0), speed=100.0)
+        lines, _ = self.run_step(t, "MOVE 1 2700.0 1")
+        self.assertTrue(words(lines)[-2].startswith("DONE 1 "), lines)
+        self.assertEqual(words(lines)[-1], "STATE ARMED")
+        self.assertFalse(any(line.startswith("FAULT") for line in lines), lines)
+        self.assertEqual((t.truth()["pump"], t.truth()["valve"]), (0, 0))
+
+
+class TestStall(SimTestCase):
+    def test_stall_is_detected_at_the_minimum_speed(self):
+        t = self.sim("--start", "0", "125", "0")
+        self.arm(t, speed=25.0)
+        t.send("MOVE 1 1000.0 0")
+        t.advance(300)
+        t.send("PING")
+        t.set_stall(True)
+        lines = []
+        elapsed = 0
+        while elapsed < 2200 and not any(line.startswith("FAULT") for line in lines):
+            lines += t.advance(100) + t.send("PING")
+            elapsed += 100
+        self.assertIn("FAULT STALL", words(lines))
 
 
 class TestPause(SimTestCase):
@@ -184,6 +268,37 @@ class TestPause(SimTestCase):
             lines = t.advance(100) + t.send("PING")
         self.assertTrue(any(line.startswith("DONE") for line in lines))
         self.assertAlmostEqual(t.truth()["x"], 1000.0, delta=20.0)
+
+    def test_pause_and_resume_during_a_turn_and_during_an_edge_search_complete(self):
+        t = self.sim("--start", "1200", "1200", "0")
+        self.arm(t, pose=(1200.0, 1200.0, 0.0))
+        lines = list(t.send("TURN 1 90.0"))
+        lines += run_for(t, 500)
+        self.assertEqual(words(t.send("PAUSE")), ["ACK 0", "STATE PAUSED"])
+        run_for(t, 300)
+        first = t.truth()["heading"]
+        run_for(t, 300)
+        self.assertAlmostEqual(t.truth()["heading"], first, delta=0.5)  # standing still
+        self.assertGreater(first, 5.0)
+        self.assertLess(first, 85.0)  # it was paused part-way through the turn
+        self.assertEqual(words(t.send("RESUME")), ["ACK 0", "STATE RUNNING"])
+        lines, _ = self.finish_step(t, lines)
+        self.assertEqual(words(lines)[-2:][1], "STATE ARMED")
+        self.assertLess(heading_difference(t.truth()["heading"], 90.0), 2.0)
+
+        t = self.sim("--start", "2300", "125", "0")
+        self.arm(t, pose=(2300.0, 125.0, 0.0))
+        lines = list(t.send("EDGE 1 x 2438.4"))
+        lines += run_for(t, 1000)
+        self.assertEqual(words(t.send("PAUSE")), ["ACK 0", "STATE PAUSED"])
+        run_for(t, 300)
+        first = t.truth()["x"]
+        run_for(t, 300)
+        self.assertAlmostEqual(t.truth()["x"], first, delta=0.5)
+        self.assertLess(first, 2438.0)  # paused before reaching the edge
+        self.assertEqual(words(t.send("RESUME")), ["ACK 0", "STATE RUNNING"])
+        lines, _ = self.finish_step(t, lines)
+        self.assertEqual(words(lines)[-2:], ["DONE 1 2438.4 125.0 0.0", "STATE ARMED"])
 
     def test_the_watchdog_still_applies_while_paused(self):
         t = self.sim("--start", "0", "125", "0")

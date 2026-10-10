@@ -13,6 +13,8 @@ class Hal {
   virtual float gyroHeadingDeg() = 0;                      // integrated yaw, counter-clockwise positive, continuous
   virtual void setPump(bool on) = 0;
   virtual void setValve(bool open) = 0;
+  // True only when BOTH front edge sensors touch the edge the rover is driving into. A rover that
+  // touches with one corner only is not yet square to the edge, so that is not contact.
   virtual bool edgeContact() = 0;
   virtual bool estopPressed() = 0;
 };

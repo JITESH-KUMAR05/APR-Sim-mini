@@ -7,7 +7,7 @@
 // Wheels follow the duty command with a first-order lag and lose a fixed fraction of
 // their travel to slip (the encoders count wheel rotation, the ground does not move that far).
 // The gyro reports the true heading plus a constant bias drift. The rover cannot leave the
-// rectangle: at the boundary the edge sensor reports contact.
+// rectangle: when it faces and touches a boundary the edge sensor reports contact.
 struct PlantOptions {
   float slip;            // fraction of wheel travel lost, 0.03 means 3%
   uint32_t seed;

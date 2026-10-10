@@ -15,10 +15,13 @@ class Motion {
   void setWall(float widthMm, float heightMm);
   void setSpeed(float mmPerSecond);
   void setPose(float xMm, float yMm, float headingDeg);
+  void forgetSetup();  // wall and pose are unknown again (after STOP, CLEAR or a fault)
 
   void startMove(float mm, bool spray);
   void startTurn(float degrees);
   void startEdge(char axis, float valueMm);
+  // True if an EDGE request makes sense: the rover faces the wall edge named by axis and value.
+  bool edgeRequestValid(char axis, float valueMm) const;
 
   void pause();
   void resume();

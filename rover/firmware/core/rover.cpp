@@ -16,7 +16,7 @@ int32_t toTenths(float value) {
 Rover::Rover(Hal& hal, Sink& sink)
     : hal_(hal), sink_(sink), motion_(hal), state_(STATE_BOOT), fault_(FAULT_NONE),
       helloSeen_(false), wallSet_(false), speedSet_(false), poseSet_(false),
-      wallWTenths_(0), wallHTenths_(0), speedTenths_(0), currentId_(0), lastRxMs_(0), lastPoseMs_(0) {}
+      wallWTenths_(0), wallHTenths_(0), poseXTenths_(0), poseYTenths_(0), speedTenths_(0), currentId_(0), lastRxMs_(0), lastPoseMs_(0) {}
 
 void Rover::emit(const char* payload) {
   char line[proto::kMaxLine + 8];
@@ -62,6 +62,14 @@ void Rover::setState(State state) {
 
 void Rover::clearSetup() {
   wallSet_ = speedSet_ = poseSet_ = false;  // HELLO is a one-time handshake, not part of the setup
+  motion_.forgetSetup();  // a stale wall or pose estimate must not fault again in IDLE
+}
+
+// The pose may be outside the wall rectangle by at most cfg::kBoundsMarginMm (inclusive), in tenths.
+bool Rover::poseInsideWall(int32_t xTenths, int32_t yTenths, int32_t wTenths, int32_t hTenths) const {
+  int32_t marginTenths = (int32_t)(cfg::kBoundsMarginMm * 10.0f);
+  return xTenths >= -marginTenths && xTenths <= wTenths + marginTenths &&
+         yTenths >= -marginTenths && yTenths <= hTenths + marginTenths;
 }
 
 void Rover::enterFault(Fault fault) {
@@ -133,18 +141,28 @@ void Rover::handleLine(const char* line) {
         return;
       }
       if (message.cmd == proto::CMD_WALL) {
+        if (poseSet_ && !poseInsideWall(poseXTenths_, poseYTenths_, message.a, message.b)) {
+          emitNak(0, "BADARG");
+          return;
+        }
         wallWTenths_ = message.a;
         wallHTenths_ = message.b;
         motion_.setWall(fromTenths(message.a), fromTenths(message.b));
         wallSet_ = true;
       } else if (message.cmd == proto::CMD_SPEED) {
-        if (message.a > cfg::kMaxSpeedMmS * 10) {
+        if (message.a > cfg::kMaxSpeedMmS * 10 || message.a < (int32_t)(cfg::kMinSpeedMmS * 10)) {
           emitNak(0, "SPEED");
           return;
         }
         speedTenths_ = message.a;
         speedSet_ = true;
       } else {
+        if (wallSet_ && !poseInsideWall(message.a, message.b, wallWTenths_, wallHTenths_)) {
+          emitNak(0, "BADARG");
+          return;
+        }
+        poseXTenths_ = message.a;
+        poseYTenths_ = message.b;
         motion_.setPose(fromTenths(message.a), fromTenths(message.b), fromTenths(message.c));
         poseSet_ = true;
       }
@@ -165,14 +183,24 @@ void Rover::handleLine(const char* line) {
         emitNak(message.id, "BADSTATE");
         return;
       }
+      if (hal_.estopPressed()) {  // pressed since the last tick: do not start anything
+        enterFault(FAULT_ESTOP);
+        emitNak(message.id, "BADSTATE");
+        return;
+      }
       if (message.cmd == proto::CMD_MOVE) {
         int32_t longestTenths = wallWTenths_ > wallHTenths_ ? wallWTenths_ : wallHTenths_;
         int32_t marginTenths = (int32_t)(cfg::kMoveMarginMm * 10.0f);
         float seconds = fromTenths(message.a) / fromTenths(speedTenths_);
-        if (message.a > longestTenths + marginTenths || (message.b == 1 && seconds * 1000.0f > cfg::kPumpMaxMs)) {
+        // The pump time of a spray MOVE is its travel time plus an allowance for the ramp and the creep.
+        if (message.a > longestTenths + marginTenths ||
+            (message.b == 1 && seconds * 1000.0f + (float)cfg::kPumpAllowanceMs > (float)cfg::kPumpMaxMs)) {
           emitNak(message.id, "TOO_LONG");
           return;
         }
+      } else if (message.cmd == proto::CMD_EDGE && !motion_.edgeRequestValid(message.axis, fromTenths(message.a))) {
+        emitNak(message.id, "BADARG");
+        return;
       }
       startStep(message);
       return;
@@ -187,6 +215,11 @@ void Rover::handleLine(const char* line) {
       return;
     case proto::CMD_RESUME:
       if (state_ != STATE_PAUSED) {
+        emitNak(0, "BADSTATE");
+        return;
+      }
+      if (hal_.estopPressed()) {
+        enterFault(FAULT_ESTOP);
         emitNak(0, "BADSTATE");
         return;
       }

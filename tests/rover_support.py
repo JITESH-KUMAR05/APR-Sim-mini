@@ -129,7 +129,11 @@ class SimTestCase(unittest.TestCase):
         Send one step and let simulated time pass, feeding the watchdog, until DONE or FAULT.
         Returns (lines, elapsed_ms) without the POSE stream and PONG replies.
         """
-        lines = list(transport.send(payload))
+        return self.finish_step(transport, list(transport.send(payload)), max_ms)
+
+    def finish_step(self, transport, lines, max_ms=90000):
+        """Continue a step that is already running (`lines` are the replies so far), same return as run_step()."""
+        lines = list(lines)
         elapsed = 0
         while elapsed < max_ms:
             batch = transport.advance(100) + transport.send("PING")

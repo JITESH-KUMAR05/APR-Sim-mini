@@ -12,7 +12,8 @@ enum Fault {
   FAULT_OUT_OF_BOUNDS,
   FAULT_HEADING,
   FAULT_EDGE_NOT_FOUND,
-  FAULT_PUMP_TIMEOUT
+  FAULT_PUMP_TIMEOUT,
+  FAULT_EDGE_MISMATCH
 };
 
 inline const char* stateName(State state) {
@@ -38,6 +39,7 @@ inline const char* faultName(Fault fault) {
     case FAULT_HEADING: return "HEADING";
     case FAULT_EDGE_NOT_FOUND: return "EDGE_NOT_FOUND";
     case FAULT_PUMP_TIMEOUT: return "PUMP_TIMEOUT";
+    case FAULT_EDGE_MISMATCH: return "EDGE_MISMATCH";
   }
   return "?";
 }

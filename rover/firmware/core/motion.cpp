@@ -31,6 +31,11 @@ void Motion::setWall(float widthMm, float heightMm) {
 
 void Motion::setSpeed(float mmPerSecond) { speed_ = mmPerSecond; }
 
+void Motion::forgetSetup() {
+  wallKnown_ = false;
+  poseKnown_ = false;
+}
+
 void Motion::setPose(float xMm, float yMm, float headingDeg) {
   x_ = xMm;
   y_ = yMm;
@@ -143,7 +148,9 @@ void Motion::startMove(float mm, bool spray) {
     sprayOpen_ = true;
     waitUntilMs_ = now + cfg::kValveOpenDelayMs;
   }
-  timeoutMs_ = (uint32_t)(2.0f * (mm / speed_) * 1000.0f) + 2000 + cfg::kValveOpenDelayMs;
+  float timeout = 2.0f * (mm / speed_) * 1000.0f + 2000.0f + (float)cfg::kValveOpenDelayMs;
+  if (timeout > 4.0e9f) timeout = 4.0e9f;  // keep the float to uint32 conversion in range
+  timeoutMs_ = (uint32_t)timeout;
   resetStall(stallWindowMs_, stallMotionMm_);
 }
 
@@ -171,6 +178,14 @@ void Motion::startEdge(char axis, float valueMm) {
   runMs_ = 0;
   timeoutMs_ = (uint32_t)(2.0f * (cfg::kEdgeSearchMm / cfg::kEdgeSpeedMmS) * 1000.0f) + 2000;
   resetStall(stallWindowMs_, stallMotionMm_);
+}
+
+bool Motion::edgeRequestValid(char axis, float valueMm) const {
+  float angle = nominalHeading_ * kDegToRad;
+  float along = axis == 'x' ? cosf(angle) : sinf(angle);
+  if (fabsf(along) < cfg::kEdgeFacingCos) return false;
+  float edge = along > 0 ? (axis == 'x' ? wallW_ : wallH_) : 0.0f;
+  return fabsf(valueMm - edge) <= cfg::kEdgeAxisTolMm;
 }
 
 void Motion::pause() {
@@ -240,7 +255,7 @@ Motion::Event Motion::tick() {
   if (runMs_ > timeoutMs_) return raise(FAULT_STEP_TIMEOUT);
 
   if (kind_ == KIND_MOVE) {
-    if (now < waitUntilMs_) {
+    if ((int32_t)(now - waitUntilMs_) < 0) {
       drive(0, 0);
       return EV_NONE;
     }
@@ -252,6 +267,8 @@ Motion::Event Motion::tick() {
     }
     if (sprayOpen_ && remaining <= cfg::kValveCloseLeadMm) {
       hal_.setValve(false);
+      hal_.setPump(false);
+      pumpOn_ = false;
       sprayOpen_ = false;
     }
     float profile = fminf(speed_, sqrtf(2.0f * cfg::kAccelMmS2 * remaining) + cfg::kMinMoveSpeedMmS);
@@ -283,6 +300,13 @@ Motion::Event Motion::tick() {
 
   // KIND_EDGE
   if (hal_.edgeContact()) {
+    // A contact far from where the estimate said, or one that turns the rover a lot, means the
+    // rover is not where it thinks it is: report it instead of silently rewriting the pose.
+    float estimate = edgeAxis_ == 'x' ? x_ : y_;
+    if (fabsf(estimate - edgeValue_) > cfg::kEdgeMaxCorrectionMm ||
+        fabsf(heading_ - nominalHeading_) > cfg::kEdgeMaxHeadingCorrectionDeg) {
+      return raise(FAULT_EDGE_MISMATCH);
+    }
     if (edgeAxis_ == 'x') x_ = edgeValue_; else y_ = edgeValue_;
     // Both bumpers touching means the rover is square to the edge: the heading is the nominal one.
     gyroOffset_ = hal_.gyroHeadingDeg() - nominalHeading_;
