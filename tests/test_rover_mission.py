@@ -38,6 +38,17 @@ class TestProfile(unittest.TestCase):
         profile = load_profile()
         self.assertEqual(profile["schema"], "apr-rover-profile/1")
         self.assertEqual(profile["max_speed_mps"], 0.25)
+        self.assertEqual(profile["pump_max_continuous_s"], 30.0)
+
+    def test_the_pump_limit_is_optional_but_must_be_a_positive_number_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "profile.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"schema": "apr-rover-profile/1", "wheel_diameter_mm": 80.0, "max_speed_mps": 0.25}, f)
+            self.assertNotIn("pump_max_continuous_s", load_profile(path))
+            for bad in (0, -1, True, "30", float("inf")):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    load_profile(write_profile(tmp, pump_max_continuous_s=bad))
 
     def test_bad_profiles_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
