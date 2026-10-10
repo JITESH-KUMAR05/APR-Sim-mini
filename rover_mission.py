@@ -18,8 +18,10 @@ File contract
 - x_mm/y_mm and start_pose are the position of the spray nozzle centre in the wall frame.
   start_pose is where the operator places the rover (nozzle centre) and the direction it faces.
 - EDGE_ALIGN: the rover drives slowly along its current heading until its edge sensors trigger
-  (firmware faults if they do not trigger within 150 mm), then sets the coordinate on `axis` to
-  value_mm. Pushing into the edge with both sensors squares the rover to it, so its heading is
+  (firmware faults EDGE_NOT_FOUND if they do not trigger within 150 mm plus 5% of the wall size
+  along the search axis, and EDGE_MISMATCH if the contact is more than 150 mm beyond that
+  distance from the estimate or needs more than 10 degrees of heading correction), then sets the
+  coordinate on `axis` to value_mm. Pushing into the edge with both sensors squares the rover to it, so its heading is
   also reset to the nominal heading. That resets gyro drift once per row. The step's own
   x_mm/y_mm are the expected pose BEFORE that reset. The offset between the edge sensors and the
   nozzle centre is a rover constant, added with the real hardware in plan P2b.

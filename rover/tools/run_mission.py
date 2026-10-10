@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
@@ -21,28 +21,57 @@ from rover_link import SimTransport, parse_line, tenths  # noqa: E402
 from rover_mission import verify_checksum  # noqa: E402
 
 PROTOCOL_VERSION = 1
+WATCHDOG_MS = 500  # the rover faults after this much silence
+MIN_WAIT_MS = 10  # the simulator advances in 10 ms ticks
+MAX_WAIT_MS = WATCHDOG_MS // 2  # a PING must reach the rover at least twice per watchdog period
 
 
 class MissionError(Exception):
     """The rover refused a command, reported a fault, or did not finish."""
 
 
-def _expect_ack(lines: List[str], what: str) -> None:
+def _parsed(lines: List[str]) -> List[Tuple[str, List[str]]]:
+    """Parse the rover's lines. A line with a bad CRC is line noise: skip it."""
+    out = []
     for line in lines:
-        word, args = parse_line(line)
-        if word == "NAK":
-            raise MissionError(f"{what} refused: NAK {' '.join(args)}")
-        if word == "ACK":
-            return
-    raise MissionError(f"{what}: no ACK received")
+        try:
+            out.append(parse_line(line))
+        except ValueError:
+            continue
+    return out
+
+
+def _expect_ack(lines: List[str], what: str, step_id: Optional[int] = None) -> None:
+    """A FAULT in the reply beats a NAK: after an e-stop the rover answers FAULT ESTOP, STATE FAULT, NAK BADSTATE."""
+    fault = nak = None
+    acked = False
+    for word, args in _parsed(lines):
+        if word == "FAULT" and args and fault is None:
+            fault = args[0]
+        elif word == "NAK" and nak is None:
+            nak = " ".join(args)
+        elif word == "ACK" and (step_id is None or args[:1] == [str(step_id)]):
+            acked = True
+    if fault is not None:
+        raise MissionError(f"{what}: rover fault {fault}" + (f" (NAK {nak})" if nak else ""))
+    if nak is not None:
+        raise MissionError(f"{what} refused: NAK {nak}")
+    if not acked:
+        raise MissionError(f"{what}: no ACK received")
 
 
 def _hello(transport: Any) -> Dict[str, str]:
-    for line in transport.send("HELLO"):
-        word, args = parse_line(line)
+    for word, args in _parsed(transport.send("HELLO")):
         if word == "HELLO":
-            return dict(arg.split("=", 1) for arg in args)
+            return dict(arg.split("=", 1) for arg in args if "=" in arg)
     raise MissionError("no HELLO reply from the rover")
+
+
+def _number(text: str, what: str) -> float:
+    try:
+        return float(text)
+    except ValueError:
+        raise MissionError(f"rover sent {text!r} where {what} was expected") from None
 
 
 def _step_payload(step: Dict[str, Any]) -> str:
@@ -65,21 +94,45 @@ def run_mission(
 ) -> List[Dict[str, Any]]:
     """
     Run every step. Returns one record per step with the expected and the reported pose.
-    Raises MissionError on any NAK or FAULT. Sends PING between waits so the rover's
-    500 ms watchdog stays fed.
+    Raises MissionError on any NAK, FAULT, unusable reply or timeout. Sends PING after every
+    wait (wait_ms must be 10 to 250 ms) so the rover's 500 ms watchdog stays fed. If the run
+    fails after the handshake, a best-effort STOP is sent so the motors do not wait for the
+    watchdog.
     """
+    if isinstance(wait_ms, bool) or not isinstance(wait_ms, int) or not MIN_WAIT_MS <= wait_ms <= MAX_WAIT_MS:
+        raise MissionError(f"wait_ms must be {MIN_WAIT_MS} to {MAX_WAIT_MS} ms to keep the {WATCHDOG_MS} ms watchdog fed")
     if not verify_checksum(mission):
         raise MissionError("mission checksum does not match its content")
 
     hello = _hello(transport)
-    if int(hello.get("proto", "0")) != PROTOCOL_VERSION:
+    if hello.get("proto") != str(PROTOCOL_VERSION):
         raise MissionError(f"rover speaks protocol {hello.get('proto')}, expected {PROTOCOL_VERSION}")
     speed_mm_s = mission["speed_mps"] * 1000.0
-    if speed_mm_s > float(hello["max_speed_mm_s"]):
+    max_speed = _number(hello.get("max_speed_mm_s", ""), "max_speed_mm_s")
+    if round(speed_mm_s, 1) > max_speed:
         raise MissionError(f"mission speed {speed_mm_s:.0f} mm/s is above the rover's {hello['max_speed_mm_s']} mm/s")
     pump_limit = mission["profile"].get("pump_max_continuous_s")
-    if pump_limit is not None and pump_limit > float(hello["pump_max_s"]):
+    if pump_limit is not None and pump_limit > _number(hello.get("pump_max_s", ""), "pump_max_s"):
         raise MissionError("the profile allows a longer pump run than the firmware does")
+
+    try:
+        return _run_steps(transport, mission, speed_mm_s, wait_ms, max_step_ms, on_step)
+    except Exception:
+        try:
+            transport.send("STOP")
+        except Exception:
+            pass
+        raise
+
+
+def _run_steps(
+    transport: Any,
+    mission: Dict[str, Any],
+    speed_mm_s: float,
+    wait_ms: int,
+    max_step_ms: int,
+    on_step: Optional[Callable[[Dict[str, Any], Dict[str, float]], None]],
+) -> List[Dict[str, Any]]:
 
     wall = mission["wall"]
     pose = mission["start_pose"]
@@ -93,7 +146,7 @@ def run_mission(
     records: List[Dict[str, Any]] = []
     for step in mission["steps"]:
         step_id = step["i"]
-        _expect_ack(transport.send(_step_payload(step)), f"step {step_id}")
+        _expect_ack(transport.send(_step_payload(step)), f"step {step_id}", step_id)
         waited = 0
         done: Optional[Dict[str, float]] = None
         while done is None:
@@ -101,12 +154,13 @@ def run_mission(
                 raise MissionError(f"step {step_id} did not finish within {max_step_ms} ms")
             lines = transport.wait(wait_ms) + transport.send("PING")
             waited += wait_ms
-            for line in lines:
-                word, args = parse_line(line)
-                if word == "FAULT":
+            for word, args in _parsed(lines):
+                if word == "FAULT" and args:
                     raise MissionError(f"rover fault during step {step_id}: {args[0]}")
-                if word == "DONE" and int(args[0]) == step_id:
-                    done = {"x": float(args[1]), "y": float(args[2]), "heading": float(args[3])}
+                if word == "DONE" and args[:1] == [str(step_id)]:
+                    if len(args) != 4:
+                        raise MissionError(f"step {step_id}: malformed DONE {' '.join(args)}")
+                    done = {"x": _number(args[1], "x"), "y": _number(args[2], "y"), "heading": _number(args[3], "heading")}
         record = {
             "i": step_id,
             "op": step["op"],
@@ -137,7 +191,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("mission", help="path to apr_rover_mission.json")
     parser.add_argument("--sim", required=True, help="path to the rover_sim binary")
-    parser.add_argument("--sim-option", action="append", default=[], help="extra rover_sim option, repeatable")
+    parser.add_argument("--sim-option", action="append", default=[],
+                        help="extra rover_sim option, repeatable; use the = form for a value that starts with '-', "
+                             "for example --sim-option=--slip --sim-option=0.03")
     args = parser.parse_args(argv)
 
     with open(args.mission, encoding="utf-8") as f:
@@ -145,15 +201,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     pose = mission["start_pose"]
     options = ["--start", str(pose["x_mm"]), str(pose["y_mm"]), str(pose["heading_deg"]),
                "--wall", str(mission["wall"]["width_mm"]), str(mission["wall"]["height_mm"])] + args.sim_option
-    transport = SimTransport(args.sim, options)
+    transport = None
     try:
+        transport = SimTransport(args.sim, options)
         records = run_mission(transport, mission)
         truth = transport.truth()
-    except MissionError as error:
-        print(f"mission failed: {error}")
+    except (MissionError, ValueError, KeyError, RuntimeError, OSError) as error:
+        print(f"mission failed: {error if isinstance(error, MissionError) else repr(error)}", file=sys.stderr)
         return 1
     finally:
-        transport.close()
+        if transport is not None:
+            transport.close()
 
     errors = pose_errors(records)
     print(f"{len(records)} steps done. Largest reported-versus-expected pose difference: "

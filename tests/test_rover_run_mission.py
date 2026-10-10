@@ -1,5 +1,4 @@
 import contextlib
-import copy
 import io
 import json
 import os
@@ -8,7 +7,8 @@ import unittest
 
 from rover_support import SimTestCase
 from geometry_engine import START_CORNERS, GeometryEngine
-from rover_mission import compile_rover_mission, load_profile
+from rover_link import frame
+from rover_mission import _checksum, compile_rover_mission, load_profile
 from run_mission import MissionError, main, pose_errors, run_mission
 
 WALL = 2438.4  # 8 ft square
@@ -65,7 +65,7 @@ class TestRunMission(RunMissionTestCase):
                 run_mission(t, mission)
                 sprayed = sum(step["mm"] for step in mission["steps"] if step["op"] == "MOVE" and step["spray"])
                 self.assertGreater(sprayed, 10000.0)
-                self.assertAlmostEqual(t.truth()["painted"], sprayed, delta=0.02 * sprayed)
+                self.assertAlmostEqual(t.truth()["painted"], sprayed, delta=0.005 * sprayed)
                 truth = t.truth()
                 self.assertEqual((truth["pump"], truth["valve"]), (0, 0))
 
@@ -151,12 +151,145 @@ class TestCommandLine(RunMissionTestCase):
         self.assertIn("True final pose", out.getvalue())
 
     def test_the_command_line_reports_a_failed_mission(self):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
             code = main([self.write_mission(compiled()), "--sim", self.binary, "--sim-option=--motor-scale", "--sim-option=0.1"])
         self.assertEqual(code, 1)
-        self.assertIn("mission failed", out.getvalue())
-        self.assertIn("STEP_TIMEOUT", out.getvalue())
+        self.assertIn("mission failed", err.getvalue())
+        self.assertIn("STEP_TIMEOUT", err.getvalue())
+
+    def test_a_missing_simulator_binary_is_a_failed_mission_not_a_traceback(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = main([self.write_mission(compiled()), "--sim", os.path.join(tempfile.gettempdir(), "no_such_rover_sim.exe")])
+        self.assertEqual(code, 1)
+        self.assertIn("mission failed", err.getvalue())
+
+
+def rover_line(payload):
+    return frame(payload)
+
+
+class FakeRover:
+    """Scripted transport: replies maps a sent word to the lines the rover answers with."""
+
+    def __init__(self, replies, wait_replies=()):
+        self.replies = replies
+        self.wait_replies = list(wait_replies)
+        self.sent = []
+        self.waited = 0
+
+    def send(self, payload):
+        self.sent.append(payload)
+        word = payload.split()[0]
+        reply = self.replies.get(word, ["ACK 0"])
+        if callable(reply):
+            reply = reply(payload)
+        return [rover_line(line) if not line.endswith("!raw") else line[:-4] for line in reply]
+
+    def wait(self, ms):
+        self.waited += ms
+        return self.wait_replies.pop(0) if self.wait_replies else []
+
+
+HELLO = "HELLO fw=sim proto=1 max_speed_mm_s=250 pump_max_s=30"
+
+
+def small_mission():
+    return compiled()
+
+
+def step_ack(payload):
+    return [f"ACK {payload.split()[1]}"]
+
+
+class TestHostRobustness(unittest.TestCase):
+    def rover(self, wait_replies=(), **overrides):
+        replies = {"HELLO": [HELLO], "MOVE": step_ack, "TURN": step_ack, "EDGE": step_ack}
+        replies.update(overrides)
+        return FakeRover(replies, wait_replies)
+
+    def test_wait_ms_that_would_starve_the_watchdog_or_hang_is_refused(self):
+        for bad in (0, 5, 251, 500, 600, -10, True, 1.5):
+            with self.subTest(wait_ms=bad):
+                fake = self.rover()
+                with self.assertRaisesRegex(MissionError, "wait_ms"):
+                    run_mission(fake, small_mission(), wait_ms=bad)
+                self.assertEqual(fake.sent, [])
+
+    def test_a_corrupted_hello_is_a_mission_error(self):
+        for hello in ("HELLO fw=sim proto=1 pump_max_s=30", "HELLO fw=sim proto=1 max_speed_mm_s=abc pump_max_s=30",
+                      "HELLO junk proto=1 max_speed_mm_s=250 pump_max_s=30"):
+            with self.subTest(hello=hello):
+                with self.assertRaises(MissionError):
+                    run_mission(self.rover(HELLO=[hello]), small_mission())
+
+    def test_a_protocol_version_mismatch_is_refused(self):
+        with self.assertRaisesRegex(MissionError, "protocol 2"):
+            run_mission(self.rover(HELLO=["HELLO fw=sim proto=2 max_speed_mm_s=250 pump_max_s=30"]), small_mission())
+
+    def test_a_line_with_a_bad_crc_is_skipped_as_noise(self):
+        mission = small_mission()
+        first = mission["steps"][0]
+        done = f"DONE {first['i']} 1.0 2.0 3.0"
+        fake = self.rover(wait_replies=[["PONG*00!raw", rover_line(done)]])
+        trimmed = {key: value for key, value in mission.items() if key != "checksum"}
+        trimmed["steps"] = mission["steps"][:1]
+        trimmed["checksum"] = _checksum(trimmed)
+        records = run_mission(fake, trimmed)
+        self.assertEqual(records[0]["reported"], {"x": 1.0, "y": 2.0, "heading": 3.0})
+
+    def test_a_malformed_done_is_a_mission_error(self):
+        mission = small_mission()
+        first = mission["steps"][0]
+        fake = self.rover(wait_replies=[[rover_line(f"DONE {first['i']} 1.0")]])
+        with self.assertRaisesRegex(MissionError, "malformed DONE"):
+            run_mission(fake, mission)
+        self.assertEqual(fake.sent[-1], "STOP")
+
+    def test_an_estop_at_command_time_reports_the_estop_not_a_badstate_nak(self):
+        mission = small_mission()
+        estop = lambda payload: ["FAULT ESTOP", "STATE FAULT", f"NAK {payload.split()[1]} BADSTATE"]
+        with self.assertRaisesRegex(MissionError, "fault ESTOP"):
+            run_mission(self.rover(MOVE=estop, TURN=estop, EDGE=estop), mission)
+
+    def test_a_fault_arriving_with_the_heartbeat_reply_stops_the_run(self):
+        fake = self.rover(PING=["FAULT STALL"])
+        with self.assertRaisesRegex(MissionError, "STALL"):
+            run_mission(fake, small_mission())
+        self.assertEqual(fake.sent[-1], "STOP")
+
+    def test_a_step_that_never_finishes_times_out_and_stops_the_rover(self):
+        fake = self.rover()
+        with self.assertRaisesRegex(MissionError, "did not finish"):
+            run_mission(fake, small_mission(), max_step_ms=300)
+        self.assertEqual(fake.sent[-1], "STOP")
+        self.assertLessEqual(fake.waited, 300)
+
+    def test_a_done_for_another_step_is_ignored(self):
+        fake = self.rover(wait_replies=[[rover_line("DONE 99 1.0 2.0 3.0")]])
+        with self.assertRaisesRegex(MissionError, "did not finish"):
+            run_mission(fake, small_mission(), max_step_ms=200)
+
+    def test_an_ack_for_another_step_does_not_count(self):
+        fake = self.rover(MOVE=["ACK 99"], TURN=["ACK 99"], EDGE=["ACK 99"])
+        with self.assertRaisesRegex(MissionError, "no ACK"):
+            run_mission(fake, small_mission())
+
+    def test_a_refused_setup_command_names_the_command_and_the_reason(self):
+        for word in ("SPEED", "POSE", "ARM", "WALL"):
+            with self.subTest(word=word):
+                with self.assertRaisesRegex(MissionError, f"{word} refused: NAK 0 BADSTATE"):
+                    run_mission(self.rover(**{word: ["NAK 0 BADSTATE"]}), small_mission())
+
+    def test_a_profile_without_a_pump_limit_still_runs(self):
+        profile = load_profile()
+        profile.pop("pump_max_continuous_s")
+        mission = compiled(profile=profile)
+        fake = self.rover(wait_replies=[[rover_line(f"DONE {mission['steps'][0]['i']} 1.0 2.0 3.0")]])
+        with self.assertRaisesRegex(MissionError, "did not finish"):  # the fake never finishes step 2
+            run_mission(fake, mission, max_step_ms=100)
+        self.assertIn("ARM", fake.sent)
 
 
 class TestPoseErrors(unittest.TestCase):
