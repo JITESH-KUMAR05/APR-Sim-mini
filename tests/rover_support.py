@@ -25,6 +25,7 @@ BUILD_DIR = os.path.join(SIM_DIR, "build")
 FLAGS = ["-std=c++11", "-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-fno-rtti", "-O2"]
 
 _binaries = {}
+_blocked = {}
 
 
 def _source_files():
@@ -37,17 +38,29 @@ def _source_files():
 
 
 def _runs(binary, probe):
+    """
+    True if the program launched and exited cleanly on `probe`; False if the operating system
+    refused to launch it (an OSError, which is what Application Control produces). A program that
+    launches but crashes, exits non-zero or hangs is broken, not blocked: that raises AssertionError.
+    """
     try:
         result = subprocess.run([binary], input=probe, capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return False
-    return result.returncode == 0
+    except subprocess.TimeoutExpired as error:
+        stderr = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else (error.stderr or "")
+        raise AssertionError(f"{binary} launched but did not finish within {error.timeout} s; stderr: {stderr!r}")
+    if result.returncode != 0:
+        raise AssertionError(f"{binary} launched but exited with return code {result.returncode}; stderr: {result.stderr!r}")
+    return True
 
 
 def build(name, sources, probe, attempts=12):
     """Return the path of a runnable test program built from `sources`, or raise unittest.SkipTest."""
     if name in _binaries:
         return _binaries[name]
+    if name in _blocked:
+        raise unittest.SkipTest(_blocked[name])
     gpp = shutil.which("g++")
     if gpp is None:
         raise unittest.SkipTest("g++ was not found; install MinGW or GCC to run the rover firmware tests")
@@ -61,14 +74,19 @@ def build(name, sources, probe, attempts=12):
 
     for _ in range(attempts):
         if os.path.exists(binary):
-            os.remove(binary)
+            try:
+                os.remove(binary)
+            except OSError:
+                pass  # a locked old executable: g++ will say so if it cannot overwrite it
         result = subprocess.run([gpp] + FLAGS + sources + ["-o", binary], capture_output=True, text=True)
         if result.returncode != 0:
             raise AssertionError(f"the rover firmware does not compile:\n{result.stderr}")
         if _runs(binary, probe):
             _binaries[name] = binary
             return binary
-    raise unittest.SkipTest(f"{name} was blocked by the operating system after {attempts} builds")
+    message = f"{name} was blocked by the operating system after {attempts} builds"
+    _blocked[name] = message  # later test classes skip at once instead of paying for every build again
+    raise unittest.SkipTest(message)
 
 
 def simulator_binary():

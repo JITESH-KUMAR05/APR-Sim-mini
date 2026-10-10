@@ -6,8 +6,15 @@ from rover_link import MAX_LINE, crc8, frame, parse_line, tenths
 
 
 def ask(binary, *commands):
+    """Run the program on one line per command and return its answers, one line per command."""
     result = subprocess.run([binary], input="\n".join(list(commands) + ["QUIT"]) + "\n", capture_output=True, text=True, timeout=20)
-    return result.stdout.splitlines()
+    if result.returncode != 0:
+        raise AssertionError(f"{binary} exited with return code {result.returncode}; stderr: {result.stderr!r}")
+    answers = result.stdout.splitlines()
+    expected = sum(1 for command in commands if command != "QUIT")
+    if len(answers) != expected:
+        raise AssertionError(f"expected {expected} answer lines, got {len(answers)}: {answers!r}")
+    return answers
 
 
 def framed(payload):
@@ -44,6 +51,7 @@ class TestNumbers(ProtocolTestCase):
             "1.2345": None, "abc": None, "": None, "--1": None, "1e3": None, "5 ": None,
         }
         answers = ask(self.binary, *["TENTHS " + text for text in cases])
+        self.assertEqual(len(answers), len(cases))
         for (text, expected), answer in zip(cases.items(), answers):
             with self.subTest(text=text):
                 self.assertEqual(answer, "BAD" if expected is None else f"OK {expected}")
@@ -54,6 +62,10 @@ class TestNumbers(ProtocolTestCase):
                 text = ask(self.binary, f"FMT {value}")[0]
                 self.assertEqual(text, tenths(value / 10))
                 self.assertEqual(ask(self.binary, "TENTHS " + text), [f"OK {value}"])
+
+    def test_format_tenths_extremes_do_not_overflow(self):
+        self.assertEqual(ask(self.binary, "FMT -2147483648"), ["-214748364.8"])
+        self.assertEqual(ask(self.binary, "FMT 2147483647"), ["214748364.7"])
 
     def test_python_tenths_rounds_half_away_from_zero(self):
         self.assertEqual([tenths(v) for v in (0.04, 0.05, -0.05, 2438.44, 90)], ["0.0", "0.1", "-0.1", "2438.4", "90.0"])
@@ -78,6 +90,19 @@ class TestFraming(ProtocolTestCase):
             parse_line("DONE 4 1.0 2.0 3.0*00")
         with self.assertRaises(ValueError):
             parse_line("DONE 4 1.0 2.0 3.0")
+
+    def test_parse_line_refuses_a_line_over_the_limit(self):
+        payload = "PING" + " " * 74
+        line = f"{payload}*{crc8(payload):02X}"
+        self.assertEqual(len(line), MAX_LINE + 1)
+        with self.assertRaises(ValueError):
+            parse_line(line)
+
+    def test_tenths_refuses_nan_and_infinity(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    tenths(value)
 
 
 class TestParse(ProtocolTestCase):
@@ -105,6 +130,7 @@ class TestParse(ProtocolTestCase):
             "MOVE x 10.0 0": "BADARG id=0", "MOVE 3 10.0": "BADARG id=3",
             "TURN 4 270.0": "BADARG id=4", "TURN 4 -180.1": "BADARG id=4",
             "EDGE 5 z 10.0": "BADARG id=5", "EDGE 5 x": "BADARG id=5",
+            "EDGE 5 x 1.0 extra": "BADARG id=5",
             "HELLO now": "BADARG id=0", "PING 1": "BADARG id=0", "ARM 1 2 3 4 5 6 7": "BADARG id=0",
         }
         for payload, expected in cases.items():
@@ -134,6 +160,18 @@ class TestParse(ProtocolTestCase):
         ]
         answers = ask(self.binary, *["PARSE " + line for line in lines])
         self.assertEqual(answers, ["BADCRC"] * len(lines))
+
+    def test_a_line_of_exactly_the_limit_is_accepted(self):
+        line = frame("PING" + " " * 73)  # extra spaces are tolerated
+        self.assertEqual(len(line), MAX_LINE)
+        self.assertEqual(ask(self.binary, "PARSE " + line), ["OK PING id=0 a=0 b=0 c=0 axis=-"])
+
+    def test_a_line_one_over_the_limit_is_refused_even_with_a_valid_crc(self):
+        # The length check is the only guard for the parser's fixed-size buffer.
+        payload = "PING" + " " * 74
+        line = f"{payload}*{crc8(payload):02X}"
+        self.assertEqual(len(line), MAX_LINE + 1)
+        self.assertEqual(ask(self.binary, "PARSE " + line), ["BADCRC"])
 
     def test_lower_case_crc_digits_are_accepted(self):
         line = frame("PING")

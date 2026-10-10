@@ -37,7 +37,8 @@ bool parseTenths(const char* text, int32_t& out);
 // Write "payload*CC" into buf. Returns false if it does not fit.
 bool formatLine(char* buf, size_t capacity, const char* payload);
 
-// Write a tenths value as decimal text ("-90.0", "2438.4"). Returns the length.
+// Write a tenths value as decimal text ("-90.0", "2438.4"), always NUL-terminated when capacity > 0.
+// Returns the number of characters actually written (at most capacity - 1), 0 on error.
 size_t formatTenths(char* buf, size_t capacity, int32_t tenths);
 
 }  // namespace proto

@@ -175,10 +175,14 @@ bool formatLine(char* buf, size_t capacity, const char* payload) {
 }
 
 size_t formatTenths(char* buf, size_t capacity, int32_t tenths) {
+  if (capacity == 0) return 0;
   bool negative = tenths < 0;
-  int32_t magnitude = negative ? -tenths : tenths;
-  int written = snprintf(buf, capacity, "%s%ld.%ld", negative ? "-" : "", (long)(magnitude / 10), (long)(magnitude % 10));
-  return written < 0 ? 0 : (size_t)written;
+  // Unsigned arithmetic: negating INT32_MIN as a signed value is undefined behaviour.
+  uint32_t magnitude = negative ? (uint32_t)0 - (uint32_t)tenths : (uint32_t)tenths;
+  int written = snprintf(buf, capacity, "%s%lu.%lu", negative ? "-" : "", (unsigned long)(magnitude / 10),
+                         (unsigned long)(magnitude % 10));
+  if (written < 0) return 0;
+  return (size_t)written < capacity ? (size_t)written : capacity - 1;  // snprintf reports the would-be length
 }
 
 }  // namespace proto

@@ -5,6 +5,7 @@ numbers, and a transport that drives the PC simulator `rover_sim`.
 Quantities on the wire are millimetres and degrees in tenths, written as decimal text.
 """
 
+import math
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
@@ -22,6 +23,8 @@ def crc8(text: str) -> int:
 
 def tenths(value: float) -> str:
     """Format a number as the protocol's one-decimal text, rounding half away from zero."""
+    if math.isnan(value) or math.isinf(value):
+        raise ValueError(f"cannot format {value!r} as a protocol number")
     scaled = int(abs(value) * 10 + 0.5)
     sign = "-" if value < 0 and scaled else ""
     return f"{sign}{scaled // 10}.{scaled % 10}"
@@ -37,6 +40,8 @@ def frame(payload: str) -> str:
 def parse_line(line: str) -> Tuple[str, List[str]]:
     """Check the CRC of a received line and split it into (word, arguments)."""
     line = line.strip()
+    if len(line) > MAX_LINE:
+        raise ValueError(f"line longer than {MAX_LINE} characters: {line!r}")
     if len(line) < 4 or line[-3] != "*":
         raise ValueError(f"missing CRC: {line!r}")
     payload, given = line[:-3], line[-2:]
@@ -60,7 +65,13 @@ class SimTransport:
             bufsize=1,
         )
         self.log: List[str] = []
-        self.log.extend(self._read_until_end())  # what the rover wrote while booting
+        try:
+            self.log.extend(self._read_until_end())  # what the rover wrote while booting
+        except BaseException:
+            if self._process.poll() is None:
+                self._process.kill()
+            self.close()  # reap the child and close its pipes
+            raise
 
     def _read_until_end(self) -> List[str]:
         lines = []
@@ -97,8 +108,10 @@ class SimTransport:
 
     def truth(self) -> Dict[str, float]:
         lines = self._send_raw("@TRUTH")
-        fields = lines[-1].split()
         names = ["x", "y", "heading", "pump", "valve", "duty_left", "duty_right", "painted", "t_ms"]
+        fields = lines[-1].split() if lines else []
+        if not fields or fields[0] != "TRUTH" or len(fields) != len(names) + 1:
+            raise RuntimeError(f"expected a TRUTH line with {len(names)} values, got {lines[-1] if lines else 'no reply'!r}")
         return {name: float(value) for name, value in zip(names, fields[1:])}
 
     def set_estop(self, pressed: bool) -> List[str]:
@@ -108,11 +121,21 @@ class SimTransport:
         return self._send_raw(f"@STALL {1 if blocked else 0}")
 
     def close(self) -> None:
+        """Stop the simulator and release its pipes. Safe to call more than once."""
+        process = self._process
+        if process.poll() is None:
+            try:
+                process.stdin.write("@QUIT\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
         try:
-            self._process.stdin.write("@QUIT\n")
-            self._process.stdin.flush()
-        except (BrokenPipeError, OSError):
-            pass
-        self._process.wait(timeout=5)
-        self._process.stdout.close()
-        self._process.stdin.close()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        for pipe in (process.stdout, process.stdin):
+            try:
+                pipe.close()
+            except (OSError, ValueError):
+                pass
