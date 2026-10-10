@@ -44,7 +44,9 @@ Rules the rover enforces on arguments:
 - `WALL` and `POSE` must agree: a pose more than 50 mm outside the wall rectangle (inclusive margin), in either order of sending, gets `NAK 0 BADARG`. A refused `POSE` also forgets an earlier accepted pose, so `ARM` fails until a good `POSE` arrives.
 - `EDGE` must face the edge: the nominal heading must point within about 45 degrees (cosine at least 0.7) along the axis, and `value` must be the wall edge the rover faces (`0` or the wall size on that axis) within 1 mm. Otherwise `NAK id BADARG`.
 - `MOVE` is `NAK id TOO_LONG` if `mm` is more than `max(wall width, wall height) + 100`, or if a spray move would run the pump too long: travel time at the set speed, plus a 2 s allowance for the speed ramp and the creep, plus the valve-open delay, above 30 s.
-- A command that does not fit the state is `NAK <id> BADSTATE`, never a fault.
+- A command that does not fit the state is `NAK <id> BADSTATE` and not a fault. One exception: `MOVE`, `TURN`, `EDGE` (in ARMED) and `RESUME` (in PAUSED) with the e-stop pressed answer `FAULT ESTOP`, `STATE FAULT` and then the NAK (`NAK <id> BADSTATE` for a step, `NAK 0 BADSTATE` for `RESUME`).
+- Number syntax: an optional `-`, at least one digit before the point, then optionally a point and 1 to 3 digits. No `+`, no exponent, and `7.` and `.5` are refused. The whole part is at most 1,000,000, and so are ids (1 to 1,000,000). The `POSE` heading has no range check.
+- `STOP` in IDLE answers `ACK 0` with no `STATE` line, and still forgets the setup.
 
 `HELLO` is a one-time handshake and is not forgotten by `STOP`, a fault or `CLEAR`. `WALL`, `SPEED`, `POSE` and `ARM` have to be sent again after any of them.
 
@@ -61,7 +63,7 @@ Rules the rover enforces on arguments:
 | `PONG` | answer to `PING`. |
 | `HELLO ...` | answer to `HELLO`. |
 
-A line with a bad CRC, a bad length, or a missing or malformed `*CC` gets `NAK 0 BADCRC` and does not feed the watchdog. A well-framed line with an unknown word gets `NAK 0 UNKNOWN`. A known word with the wrong number or shape of arguments gets `NAK <id> BADARG` (`SPEED` outside 25.0 to 250.0 is `NAK 0 SPEED`).
+A line with a bad CRC, a bad length, or a missing or malformed `*CC` gets `NAK 0 BADCRC` and does not feed the watchdog. A well-framed line with an unknown word gets `NAK 0 UNKNOWN`. A known word with the wrong number or shape of arguments gets `NAK <id> BADARG` (`SPEED` of 0 or less is `NAK 0 BADARG`; `SPEED` above 250.0 or below 25.0 is `NAK 0 SPEED`). Any line with a correct length and CRC feeds the watchdog, even one the rover answers with a NAK.
 
 The host must treat a line that fails its CRC as noise and skip it (`run_mission.py` does).
 
@@ -75,13 +77,13 @@ E-stop pressed between ticks, then a command arrives: `FAULT ESTOP`, `STATE FAUL
 BOOT -> IDLE -> ARMED -> RUNNING -> ARMED     (a step finishes: DONE)
                          RUNNING <-> PAUSED   (PAUSE / RESUME)
 any state -> FAULT (latched) -> CLEAR -> IDLE
-STOP: ARMED, RUNNING or PAUSED -> IDLE
+STOP: ARMED, RUNNING or PAUSED -> IDLE (in IDLE it is only acknowledged)
 ```
 
 - There is no DONE state. The host sequences the steps and sends `STOP` at the end of the mission.
 - Motors, pump and valve are off in every state except RUNNING.
 - The pump and valve are on only during a `MOVE` with spray 1. They are off while PAUSED.
-- **Watchdog:** no valid line (any well-formed line counts, including `PING`) for 500 ms while ARMED, RUNNING or PAUSED gives `FAULT WATCHDOG`. A host must therefore send a line at least every 250 ms (`run_mission.py` pings every 100 ms and refuses anything slower than 250 ms).
+- **Watchdog:** no line with a correct length and CRC (including one the rover NAKs, and `PING`) for 500 ms while ARMED, RUNNING or PAUSED gives `FAULT WATCHDOG`. The fault comes on the first 10 ms tick after the 500 ms have passed, so about 510 ms after the last line. A host must therefore send a line at least every 250 ms (`run_mission.py` pings every 100 ms and refuses anything slower than 250 ms).
 - **E-stop input:** `FAULT ESTOP` on the next tick, in every state. The hardware relay also cuts motor and pump power independent of any code.
 - **FAULT** is latched. The only ways out are `CLEAR` (with the e-stop released), which goes to IDLE with the setup forgotten, or a power cycle. `STOP` is refused in FAULT. `PING` still answers.
 
@@ -89,11 +91,11 @@ STOP: ARMED, RUNNING or PAUSED -> IDLE
 
 | Code | Condition |
 |---|---|
-| `WATCHDOG` | nothing valid received for 500 ms while ARMED, RUNNING or PAUSED |
+| `WATCHDOG` | no line with a correct length and CRC for 500 ms while ARMED, RUNNING or PAUSED |
 | `ESTOP` | the e-stop input is pressed |
-| `STALL` | commanded wheel speed of at least 20 mm/s and less than 1 mm of wheel motion in 1 s |
-| `STEP_TIMEOUT` | a step runs longer than twice its expected time plus 2 s (`MOVE`: travel at the set speed; `TURN`: at 60 deg/s; `EDGE`: the search distance at the 30 mm/s creep speed) |
-| `OUT_OF_BOUNDS` | the pose estimate is more than 50 mm outside the `WALL` rectangle (not checked during `EDGE`, which has to touch the edge) |
+| `STALL` | commanded wheel speed of at least 20 mm/s and less than 1 mm of wheel motion in a 1 s window (fixed windows, so it is reported 1 to 2 s after the wheels stop) |
+| `STEP_TIMEOUT` | a step runs unpaused for longer than twice its expected time plus 2 s (`MOVE`: travel at the set speed, plus the valve-open delay; `TURN`: at 60 deg/s; `EDGE`: the search distance at the 30 mm/s creep speed) |
+| `OUT_OF_BOUNDS` | the pose estimate is more than 50 mm outside the `WALL` rectangle, in any state once `WALL` and `POSE` are known (so also in IDLE, ARMED and PAUSED if the rover is carried; not checked during `EDGE`, which has to touch the edge) |
 | `HEADING` | heading error above 15 degrees during a `MOVE` or an `EDGE` |
 | `EDGE_NOT_FOUND` | no edge contact within the search distance: 150 mm plus 5% of the wall size along the search axis (wheel slip over a long row grows with the row) |
 | `EDGE_MISMATCH` | the contact is more than 150 mm beyond the search distance from where the estimate said, or squaring to the edge needs a heading correction above 10 degrees |

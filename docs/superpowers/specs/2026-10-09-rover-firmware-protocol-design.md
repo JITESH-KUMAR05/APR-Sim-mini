@@ -63,7 +63,7 @@ The core never calls Arduino functions. It only uses `hal.h`: in P2 the simulato
 
 ## 2. Protocol
 
-One ASCII line per message: `WORDS args*CC\n`, where `CC` is a CRC-8 (polynomial 0x07, initial value 0) in two upper-case hex digits over everything before the `*`. Maximum 80 characters. USB serial at 115200 baud. A line with a bad CRC or length is never executed and gets `NAK 0 BADCRC`. The complete protocol is in `docs/rover-protocol.md`, which is the source of truth.
+One ASCII line per message: `WORDS args*CC\n`, where `CC` is a CRC-8 (polynomial 0x07, initial value 0) in two hex digits (upper case when written, either case accepted) over everything before the `*`. Maximum 80 characters. USB serial at 115200 baud. A line with a bad CRC or length is never executed and gets `NAK 0 BADCRC`. The complete protocol is in `docs/rover-protocol.md`, which is the source of truth.
 
 | Host to rover | Meaning |
 |---|---|
@@ -96,20 +96,20 @@ All of this is enforced inside the core, never by the host.
 - **States:** BOOT, IDLE, ARMED, RUNNING, PAUSED, and a latched FAULT reachable from every state. There is no DONE state: the host sequences the steps and sends `STOP` at the end.
 - **Outputs:** motors, pump and valve are off in every state except RUNNING during a step. The pump and valve are on only during a `MOVE` with spray 1.
 - **Watchdog:** nothing valid received for 500 ms while ARMED, RUNNING or PAUSED gives `FAULT WATCHDOG`.
-- **E-stop input:** `FAULT ESTOP` immediately. The hardware relay also cuts motor and pump power, independent of any code (spec section 1, invariant 2).
+- **E-stop input:** `FAULT ESTOP` on the next 10 ms tick. The hardware relay also cuts motor and pump power, independent of any code (spec section 1, invariant 2).
 - **Clearing:** `CLEAR` is accepted only in FAULT and only with the e-stop released. It goes to IDLE and `WALL`, `SPEED`, `POSE` and `ARM` must be sent again. The console (P3) makes a person trigger it.
 
 | Fault | Condition |
 |---|---|
-| `STALL` | motion commanded, no encoder movement for 1 s |
+| `STALL` | commanded wheel speed of at least 20 mm/s and less than 1 mm of wheel motion in a 1 s window |
 | `STEP_TIMEOUT` | a step runs longer than twice its expected time plus 2 s |
 | `OUT_OF_BOUNDS` | estimated pose more than 50 mm outside the `WALL` rectangle |
-| `HEADING` | heading error above 15 degrees during a `MOVE` |
+| `HEADING` | heading error above 15 degrees during a `MOVE` or an `EDGE` |
 | `EDGE_NOT_FOUND` | no edge contact within 150 mm plus 5% of the wall size along the search axis |
 | `EDGE_MISMATCH` | the edge contact is more than 150 mm beyond the search distance from the estimate, or squaring needs more than 10 degrees of heading correction |
-| `PUMP_TIMEOUT` | pump on longer than `pump_max_continuous_s` (new field in `rover_profile.json`, default 30 s) |
+| `PUMP_TIMEOUT` | pump on longer than 30 s (the firmware's own limit, reported in `HELLO` as `pump_max_s`; the profile field `pump_max_continuous_s` in `rover_profile.json` must not exceed it and the host tool checks that) |
 
-A command that does not fit the current state is a `NAK BADSTATE`, not a fault. A `MOVE` longer than `max(wall width, wall height) + 100 mm`, or a spray `MOVE` that would run the pump longer than `pump_max_continuous_s` at the set speed, is a `NAK TOO_LONG`. The host tool reports it and stops, because splitting passes in the compiler is future work.
+A command that does not fit the current state is a `NAK BADSTATE`, not a fault. A `MOVE` longer than `max(wall width, wall height) + 100 mm`, or a spray `MOVE` that would run the pump longer than 30 s at the set speed (travel time plus a 2 s allowance and the valve-open delay), is a `NAK TOO_LONG`. The host tool reports it and stops, because splitting passes in the compiler is future work.
 
 ## 4. Motion control
 
@@ -160,5 +160,5 @@ The core uses fixed-width integer types, no heap and no standard containers, and
 
 - 100 Hz control tick, 10 Hz pose stream, 115200 baud.
 - CRC-8 polynomial 0x07 and the 80-character line limit.
-- Watchdog 500 ms, stall 1 s, bounds margin 50 mm, heading limit 15 degrees, edge search 150 mm, pump limit default 30 s.
+- Watchdog 500 ms, stall 1 s, bounds margin 50 mm, heading limit 15 degrees, edge search 150 mm plus 5% of the wall, pump limit 30 s.
 - All the limits above are starting values in `config.h` and the profile, and are expected to change after the bench tests.

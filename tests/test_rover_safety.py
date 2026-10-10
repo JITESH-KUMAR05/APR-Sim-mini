@@ -268,8 +268,9 @@ class TestOutputsAreOffUnlessRunning(SimTestCase):
         self.assertGreater(running["duty_left"], 0)
 
         t.send("PAUSE")
+        self.assert_everything_off(t.truth())  # PAUSED, before the next control tick: the motors stop at once
         t.advance(100)
-        self.assert_everything_off(t.truth())  # PAUSED
+        self.assert_everything_off(t.truth())
 
         t.send("RESUME")
         t.advance(100)

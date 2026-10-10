@@ -192,6 +192,7 @@ bool Motion::edgeRequestValid(char axis, float valueMm) const {
 void Motion::pause() {
   if (kind_ == KIND_NONE || paused_) return;
   paused_ = true;
+  hal_.setMotorDuty(0, 0);  // do not wait for the next tick to stop the wheels
   hal_.setPump(false);
   hal_.setValve(false);
   pumpOn_ = false;

@@ -6,6 +6,7 @@
 training/
 docs/
 tests/
+rover/
 *.pdf
 *.pptx
 *.docx
