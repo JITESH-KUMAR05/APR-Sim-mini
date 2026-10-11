@@ -1,0 +1,30 @@
+[project]
+name = "apr-training"
+version = "0.1.0"
+description = "Offline training environment for the APR obstacle detector. Never deployed: the app ships only the exported ONNX file."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "torch",
+    "torchvision",
+    "ultralytics",
+    "onnx",
+    "onnxruntime",
+    "opencv-python",
+    "numpy",
+    "pillow",
+    "requests",
+    "tqdm",
+    "transformers",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true

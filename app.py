@@ -5,6 +5,8 @@ Pair-programmed for presentation & engineering demonstration.
 """
 
 import os
+import secrets
+import sys
 import io
 import logging
 import json
@@ -17,7 +19,9 @@ from flask import Flask, render_template, request, jsonify, send_file, send_from
 from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from geometry_engine import DEFAULT_START_CORNER, GeometryEngine
+from geometry_engine import DEFAULT_DIRECTION, DEFAULT_START_CORNER, GeometryEngine
+from layout_advisor import choose_layout
+from wall_synth import CLASS_NAMES, random_scene
 from cad_exporter import CADExporter
 from obstacle_detector import load_default_detector
 from rover_mission import compile_rover_mission, load_profile
@@ -120,12 +124,26 @@ def count_unverified(obstacles):
     return sum(1 for obs in obstacles if obs.get("type") == "unverified")
 
 
+def resolve_layout(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+                   start_corner, direction):
+    """Turn the operator's start corner and stripe direction (a value or "auto") into a concrete layout."""
+    limits = {}
+    if ROVER_PROFILE is not None:
+        limits = {"max_speed_mps": ROVER_PROFILE["max_speed_mps"],
+                  "pump_max_s": ROVER_PROFILE.get("pump_max_continuous_s", 30.0)}
+    return choose_layout(
+        geometry_engine, wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+        start_corner, direction, **limits,
+    )
+
+
 def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
-                  start_corner=DEFAULT_START_CORNER):
+                  start_corner=DEFAULT_START_CORNER, direction=DEFAULT_DIRECTION):
     """Plan coverage, compute metrics, write every export file and refresh the session cache."""
     start_corner = GeometryEngine.parse_start_corner(start_corner)
+    direction = GeometryEngine.parse_direction(direction)
     waypoints, path_stats = geometry_engine.plan_coverage_path(
-        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
+        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner, direction
     )
     metrics = geometry_engine.compute_metrics(
         wall_w_mm, wall_h_mm, obstacles, path_stats,
@@ -190,6 +208,7 @@ def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buff
         "metrics": metrics,
         "stats": path_stats,
         "start_corner": start_corner,
+        "direction": direction,
     })
     return waypoints, path_stats, metrics
 
@@ -210,7 +229,12 @@ def analyze_wall():
         safety_buffer_mm = float(request.form.get("safety_buffer_mm", 60.0))
         sensitivity = float(request.form.get("sensitivity", 0.5))
         sample_id = request.form.get("sample_id", None)
-        start_corner = geometry_engine.parse_start_corner(request.form.get("start_corner"))
+        requested_corner = request.form.get("start_corner")
+        requested_direction = request.form.get("direction")
+        for value, parse in ((requested_corner, geometry_engine.parse_start_corner),
+                             (requested_direction, geometry_engine.parse_direction)):
+            if value != "auto":
+                parse(value)  # reject a bad value before any work is done
 
         wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm = _sanitize_wall_params(
             wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm
@@ -256,9 +280,12 @@ def analyze_wall():
         obstacles = detection["obstacles"]
         confidence = detection["confidence"]
 
-        # 3. Plan coverage, compute metrics, write exports
+        # 3. Choose the layout, plan coverage, compute metrics, write exports
+        layout = resolve_layout(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+                                requested_corner, requested_direction)
+        start_corner, direction = layout["start_corner"], layout["direction"]
         waypoints, path_stats, metrics = build_mission(
-            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner, direction
         )
         current_session["confidence"] = confidence
 
@@ -286,8 +313,10 @@ def analyze_wall():
                 "spray_width_mm": spray_width_mm,
                 "overlap_pct": overlap_pct,
                 "safety_buffer_mm": safety_buffer_mm,
-                "start_corner": start_corner
+                "start_corner": start_corner,
+                "direction": direction
             },
+            "layout": layout,
             "obstacles": obstacles,
             "waypoints": waypoints,
             "stats": path_stats,
@@ -323,13 +352,16 @@ def replan():
             float(payload["safety_buffer_mm"]),
         )
         obstacles = geometry_engine.normalize_obstacles(payload.get("obstacles"), wall_w_mm, wall_h_mm)
-        start_corner = geometry_engine.parse_start_corner(payload.get("start_corner"))
+        layout = resolve_layout(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+                                payload.get("start_corner"), payload.get("direction"))
 
         waypoints, path_stats, metrics = build_mission(
-            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+            layout["start_corner"], layout["direction"]
         )
         return jsonify({
             "success": True,
+            "layout": layout,
             "obstacles": obstacles,
             "waypoints": waypoints,
             "stats": path_stats,
@@ -343,6 +375,93 @@ def replan():
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/random_wall", methods=["POST"])
+def random_wall():
+    """
+    Make a synthetic wall photo with known obstacles, so a demo works without a photo. The same seed always
+    gives the same wall. The photo is meant to be sent to /api/analyze like any upload, and the planted
+    obstacles are returned in wall millimetres so the detector can be checked against them.
+    """
+    payload = request.get_json(silent=True)
+    if payload is None and request.get_data():
+        return jsonify({"success": False, "error": "Expected a JSON body"}), 400
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "Expected a JSON object"}), 400
+
+    seed = payload.get("seed")
+    if seed is None:
+        seed = secrets.randbelow(1000000)
+    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 1000000:
+        return jsonify({"success": False, "error": "seed must be a whole number from 0 to 999999"}), 400
+    density = payload.get("density", 1.0)
+    if isinstance(density, bool) or not isinstance(density, (int, float)) or not 0.2 <= density <= 1.5:
+        return jsonify({"success": False, "error": "density must be a number from 0.2 to 1.5"}), 400
+
+    image, width_mm, height_mm, truth = random_scene(seed, float(density))
+    planted = {name: sum(1 for t in truth if t["type"] == name) for name in CLASS_NAMES}
+    _, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    return jsonify({
+        "success": True,
+        "seed": seed,
+        "width_mm": width_mm,
+        "height_mm": height_mm,
+        "planted": planted,
+        "truth": truth,
+        "image_data_url": "data:image/jpeg;base64," + base64.b64encode(buffer).decode("utf-8"),
+    })
+
+
+@app.route("/api/simulate_rover", methods=["POST"])
+def simulate_rover():
+    """
+    Replay the latest rover mission through the C++ rover simulator and report the planned, reported and
+    true paths. Local app only: it needs g++ and the rover/ sources, which the Vercel bundle does not have.
+    """
+    payload = request.get_json(silent=True)
+    if payload is None and request.get_data():
+        return jsonify({"success": False, "error": "Expected a JSON body"}), 400
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "Expected a JSON object"}), 400
+
+    try:
+        tools_dir = os.path.join(BASE_DIR, "rover", "tools")
+        if tools_dir not in sys.path:
+            sys.path.insert(0, tools_dir)
+        from sim_replay import SimulatorUnavailable, replay
+    except ImportError:
+        return jsonify({"success": False, "error": "The rover simulator is only available in the local app"}), 503
+
+    mission_path = os.path.join(EXPORTS_DIR, "apr_rover_mission.json")
+    if not os.path.exists(mission_path):
+        return jsonify({"success": False, "error": "Generate a wall map first"}), 409
+    try:
+        with open(mission_path, encoding="utf-8") as f:
+            mission = json.load(f)
+        result = replay(
+            mission,
+            slip=payload.get("slip", 0.03),
+            gyro_bias=payload.get("gyro_bias", 0.01),
+            seed=payload.get("seed", 1),
+        )
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except SimulatorUnavailable as exc:
+        return jsonify({"success": False, "error": str(exc)}), 503
+    except AssertionError:
+        import traceback
+        traceback.print_exc()  # the compiler output stays in the server log
+        return jsonify({"success": False, "error": "The rover simulator could not be built here; see the server log"}), 500
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(exc)}), 500
+    return jsonify({"success": True, **result})
 
 
 @app.route("/api/download/<file_type>", methods=["GET"])

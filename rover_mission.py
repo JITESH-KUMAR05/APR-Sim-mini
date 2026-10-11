@@ -135,6 +135,10 @@ def compile_rover_mission(
             edge = 0.0 if abs(x) <= _EPS_MM else wall_w_mm
             steps.append({"i": len(steps) + 1, "op": "EDGE_ALIGN", "axis": "x", "value_mm": edge,
                           "x_mm": x, "y_mm": y, "heading_deg": heading})
+        elif heading in (90.0, -90.0) and (abs(y) <= _EPS_MM or abs(y - wall_h_mm) <= _EPS_MM):
+            edge = 0.0 if abs(y) <= _EPS_MM else wall_h_mm
+            steps.append({"i": len(steps) + 1, "op": "EDGE_ALIGN", "axis": "y", "value_mm": edge,
+                          "x_mm": x, "y_mm": y, "heading_deg": heading})
 
     body = {
         "schema": SCHEMA,
