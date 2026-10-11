@@ -5,6 +5,8 @@ Pair-programmed for presentation & engineering demonstration.
 """
 
 import os
+import secrets
+import sys
 import io
 import logging
 import json
@@ -19,6 +21,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from geometry_engine import DEFAULT_DIRECTION, DEFAULT_START_CORNER, GeometryEngine
 from layout_advisor import choose_layout
+from wall_synth import CLASS_NAMES, generate_wall
 from cad_exporter import CADExporter
 from obstacle_detector import load_default_detector
 from rover_mission import compile_rover_mission, load_profile
@@ -368,6 +371,94 @@ def replan():
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/random_wall", methods=["POST"])
+def random_wall():
+    """
+    Make a synthetic wall photo with known obstacles, so a demo works without a photo. The same seed always
+    gives the same wall. The photo is meant to be sent to /api/analyze like any upload, and the planted
+    obstacles are returned in wall millimetres so the detector can be checked against them.
+    """
+    payload = request.get_json(silent=True)
+    if payload is None and request.get_data():
+        return jsonify({"success": False, "error": "Expected a JSON body"}), 400
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "Expected a JSON object"}), 400
+
+    seed = payload.get("seed")
+    if seed is None:
+        seed = secrets.randbelow(1000000)
+    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 1000000:
+        return jsonify({"success": False, "error": "seed must be a whole number from 0 to 999999"}), 400
+    density = payload.get("density", 1.0)
+    if isinstance(density, bool) or not isinstance(density, (int, float)) or not 0.2 <= density <= 1.5:
+        return jsonify({"success": False, "error": "density must be a number from 0.2 to 1.5"}), 400
+
+    image, boxes = generate_wall(seed, width=1200, density=float(density))
+    img_h, img_w = image.shape[:2]
+    width_mm = float(np.random.default_rng(seed + 7919).integers(30, 61) * 100)
+    height_mm = round(width_mm * img_h / img_w, -1)
+    scale = width_mm / img_w
+    truth = [{"type": CLASS_NAMES[cls], "x": round(x1 * scale, 1), "y": round(height_mm - y2 * scale, 1),
+              "w": round((x2 - x1) * scale, 1), "h": round((y2 - y1) * scale, 1)}
+             for cls, x1, y1, x2, y2 in boxes]
+    planted = {name: sum(1 for t in truth if t["type"] == name) for name in CLASS_NAMES}
+    _, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    return jsonify({
+        "success": True,
+        "seed": seed,
+        "width_mm": width_mm,
+        "height_mm": height_mm,
+        "planted": planted,
+        "truth": truth,
+        "image_data_url": "data:image/jpeg;base64," + base64.b64encode(buffer).decode("utf-8"),
+    })
+
+
+@app.route("/api/simulate_rover", methods=["POST"])
+def simulate_rover():
+    """
+    Replay the latest rover mission through the C++ rover simulator and report the planned, reported and
+    true paths. Local app only: it needs g++ and the rover/ sources, which the Vercel bundle does not have.
+    """
+    payload = request.get_json(silent=True)
+    if payload is None and request.get_data():
+        return jsonify({"success": False, "error": "Expected a JSON body"}), 400
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "Expected a JSON object"}), 400
+
+    try:
+        sys.path.insert(0, os.path.join(BASE_DIR, "rover", "tools"))
+        from sim_replay import SimulatorUnavailable, replay
+    except ImportError:
+        return jsonify({"success": False, "error": "The rover simulator is only available in the local app"}), 503
+
+    mission_path = os.path.join(EXPORTS_DIR, "apr_rover_mission.json")
+    if not os.path.exists(mission_path):
+        return jsonify({"success": False, "error": "Generate a wall map first"}), 409
+    try:
+        with open(mission_path, encoding="utf-8") as f:
+            mission = json.load(f)
+        result = replay(
+            mission,
+            slip=payload.get("slip", 0.03),
+            gyro_bias=payload.get("gyro_bias", 0.01),
+            seed=payload.get("seed", 1),
+        )
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except SimulatorUnavailable as exc:
+        return jsonify({"success": False, "error": str(exc)}), 503
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(exc)}), 500
+    return jsonify({"success": True, **result})
 
 
 @app.route("/api/download/<file_type>", methods=["GET"])

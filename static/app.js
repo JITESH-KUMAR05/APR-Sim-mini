@@ -40,6 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const startCornerInput = $('startCorner');
     const directionInput = $('stripeDirection');
     const layoutAdvice = $('layoutAdvice');
+    const simRoverBtn = $('simRoverBtn');
+    const simReport = $('simReport');
 
     // Value display spans
     const widthVal = $('widthValue');
@@ -97,6 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let wallCorners = null;
     let cornerPreviewUrl = null;
     let replanInFlight = false;
+    let simResult = null; // the last rover simulator replay; cleared whenever the plan changes
 
     // Initialize 3D Viewer
     try {
@@ -152,6 +155,40 @@ document.addEventListener('DOMContentLoaded', () => {
         widthInput.value = 4500; widthVal.textContent = '4500';
         heightInput.value = 3000; heightVal.textContent = '3000';
         runAnalysis();
+    });
+
+    // Random wall: the server draws a wall with known obstacles, then it goes through the normal upload path
+    const randomWallBtn = $('randomWallBtn');
+    randomWallBtn.addEventListener('click', () => {
+        randomWallBtn.disabled = true;
+        fetch('/api/random_wall', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        })
+        .then((res) => res.json())
+        .then((wall) => {
+            if (!wall.success) throw new Error(wall.error || 'Could not make a random wall');
+            return fetch(wall.image_data_url).then((res) => res.blob()).then((blob) => ({ wall, blob }));
+        })
+        .then(({ wall, blob }) => {
+            randomWallBtn.disabled = false;
+            selectedFile = new File([blob], `random_wall_${wall.seed}.jpg`, { type: 'image/jpeg' });
+            activeSampleId = null;
+            resetCorners(true);
+            sampleResidentialBtn.classList.remove('active');
+            sampleCommercialBtn.classList.remove('active');
+            widthInput.value = wall.width_mm; widthVal.textContent = String(wall.width_mm);
+            heightInput.value = wall.height_mm; heightVal.textContent = String(wall.height_mm);
+            fileNameDisplay.textContent = `Random wall #${wall.seed}`;
+            const planted = Object.entries(wall.planted).filter(([, n]) => n > 0).map(([name, n]) => `${n} ${name}`).join(', ');
+            appendLog(`Random wall #${wall.seed}, ${wall.width_mm} x ${wall.height_mm} mm. Hidden in it: ${planted || 'nothing'}`, 'info');
+            runAnalysis();
+        })
+        .catch((err) => {
+            randomWallBtn.disabled = false;
+            appendLog(`Random wall error: ${err.message}`, 'warn');
+        });
     });
 
     // File Upload handling
@@ -463,6 +500,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             currentData = data;
+            clearSimResult();
             refreshViews(data);
             showLayout(data.layout);
 
@@ -634,6 +672,60 @@ document.addEventListener('DOMContentLoaded', () => {
         replan(obstacles, startCornerInput.value);
     }
 
+    function clearSimResult() {
+        simResult = null;
+        simReport.style.display = 'none';
+        simReport.innerHTML = '';
+    }
+
+    // Replay the exported rover mission in the C++ rover simulator and draw what it did
+    simRoverBtn.addEventListener('click', () => {
+        if (!currentData || replanInFlight) return;
+        simRoverBtn.disabled = true;
+        appendLog('Replaying the mission in the rover simulator...', 'info');
+        fetch('/api/simulate_rover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slip: 0.03, gyro_bias: 0.01, seed: 1 })
+        })
+        .then((res) => res.json())
+        .then((body) => {
+            simRoverBtn.disabled = false;
+            if (!body.success) {
+                appendLog(`Rover simulator: ${body.error}`, 'warn');
+                return;
+            }
+            simResult = body;
+            showSimReport(body);
+            switchTab('2d');
+            render2DCanvas();
+            appendLog(body.ok ? 'Rover simulator run finished' : `Rover simulator stopped: ${body.error}`, body.ok ? 'success' : 'warn');
+        })
+        .catch((err) => {
+            simRoverBtn.disabled = false;
+            appendLog(`Rover simulator error: ${err.message}`, 'warn');
+        });
+    });
+
+    function showSimReport(result) {
+        simReport.innerHTML = '';
+        const summary = result.summary;
+        const lines = [
+            result.ok ? 'Run finished.' : `Stopped: ${result.error}`,
+            `Painted ${(summary.painted_mm / 1000).toFixed(1)} m of ${(summary.planned_spray_mm / 1000).toFixed(1)} m planned`,
+            `True position error, worst: x ${summary.max_truth_error_mm.x.toFixed(0)} mm, y ${summary.max_truth_error_mm.y.toFixed(0)} mm`,
+            `Rover believed itself, worst: x ${summary.max_reported_error_mm.x.toFixed(0)} mm, y ${summary.max_reported_error_mm.y.toFixed(0)} mm`,
+            `Simulated ${summary.duration_s.toFixed(0)} s, wheel slip ${(summary.slip * 100).toFixed(0)}%, gyro drift ${summary.gyro_bias_deg_s} deg/s`,
+            'Green: true path. Cyan dashed: path the rover reported.'
+        ];
+        lines.forEach((text) => {
+            const p = document.createElement('p');
+            p.textContent = text;
+            simReport.appendChild(p);
+        });
+        simReport.style.display = 'block';
+    }
+
     // Why the planner chose this corner and direction, with every layout it scored
     function showLayout(layout) {
         layoutAdvice.innerHTML = '';
@@ -696,6 +788,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 metrics: body.metrics,
                 needs_review: body.needs_review
             };
+            clearSimResult();
             refreshViews(currentData);
             showLayout(body.layout);
             render2DCanvas();
@@ -843,6 +936,25 @@ document.addEventListener('DOMContentLoaded', () => {
             ctx2d.arc(lx, ly, 6, 0, Math.PI * 2);
             ctx2d.fill();
             ctx2d.fillText('END', lx + 10, ly + 14);
+        }
+
+        // Rover simulator replay: true path (green) and the path the rover itself reported (cyan dashed)
+        if (simResult && simResult.steps && simResult.steps.length) {
+            const toCanvas = (pose) => [padX + (pose.x * scaleX), padY + drawH - (pose.y * scaleY)];
+            const trace = (poses, colour, dash) => {
+                ctx2d.beginPath();
+                poses.forEach((pose, index) => {
+                    const [cx, cy] = toCanvas(pose);
+                    if (index === 0) ctx2d.moveTo(cx, cy); else ctx2d.lineTo(cx, cy);
+                });
+                ctx2d.setLineDash(dash);
+                ctx2d.strokeStyle = colour;
+                ctx2d.lineWidth = 2;
+                ctx2d.stroke();
+                ctx2d.setLineDash([]);
+            };
+            trace([simResult.start, ...simResult.steps.map((step) => step.reported)], 'rgba(92, 225, 210, 0.9)', [5, 4]);
+            trace([simResult.start, ...simResult.steps.map((step) => step.truth)], '#7bd88f', []);
         }
 
         // Coordinate Corner Marks

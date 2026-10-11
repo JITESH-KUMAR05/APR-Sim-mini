@@ -64,6 +64,7 @@
 						<div class="preset-pills">
 							<button type="button" class="pill-btn active" id="sampleResidential">Residential Facade</button>
 							<button type="button" class="pill-btn" id="sampleCommercial">Commercial Wall</button>
+							<button type="button" class="pill-btn" id="randomWallBtn" title="Make a random wall photo with hidden obstacles and run the whole pipeline on it">Random Wall</button>
 						</div>
 					</div>
 
@@ -133,6 +134,9 @@
 					</div>
 
 					<div class="layout-advice" id="layoutAdvice" style="display:none;"></div>
+
+					<button type="button" class="primary-btn" id="simRoverBtn" title="Replay the mission in the C++ rover simulator (slip and gyro drift included). Local app only.">Run in Rover Simulator</button>
+					<div class="layout-advice" id="simReport" style="display:none;"></div>
 
 					<button class="primary-btn" id="generate">Generate Wall Map & CAD &nbsp;→</button>
 				</div>

@@ -45,6 +45,16 @@ class TestRoverUi(unittest.TestCase):
         self.assertIn("directionInput.addEventListener('change'", js)
         self.assertNotIn("layoutAdvice.innerHTML = layout", js)  # reasons are inserted as text, never as markup
 
+    def test_page_and_script_can_replay_the_mission_in_the_rover_simulator(self):
+        html = app_module.app.test_client().get("/").get_data(as_text=True)
+        self.assertIn('id="simRoverBtn"', html)
+        self.assertIn('id="simReport"', html)
+        js = read("static", "app.js")
+        self.assertIn("fetch('/api/simulate_rover'", js)
+        self.assertIn("function showSimReport(result)", js)
+        self.assertIn("clearSimResult();", js)  # a changed plan must not keep the old replay on screen
+        self.assertEqual(js.count("clearSimResult();"), 2)  # one call after analyze, one after replan
+
     def test_start_label_is_no_longer_hardcoded_to_the_origin(self):
         self.assertNotIn("START (0,0)", read("static", "app.js"))
 
