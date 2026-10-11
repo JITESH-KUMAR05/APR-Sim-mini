@@ -367,3 +367,20 @@ def to_yolo_lines(boxes: List[Box], width: int, height: int) -> List[str]:
     for cls, x1, y1, x2, y2 in boxes:
         lines.append(f"{cls} {(x1 + x2) / 2 / width:.6f} {(y1 + y2) / 2 / height:.6f} {(x2 - x1) / width:.6f} {(y2 - y1) / height:.6f}")
     return lines
+
+
+def random_scene(seed: int, density: float = 1.0, width_px: int = 1200):
+    """
+    The wall the demo's Random Wall button draws for a seed: (image, width_mm, height_mm, truth) where
+    truth lists the planted obstacles in wall millimetres, origin bottom-left. The same seed always gives
+    the same scene.
+    """
+    image, boxes = generate_wall(seed, width=width_px, density=density)
+    img_h, img_w = image.shape[:2]
+    width_mm = float(np.random.default_rng(seed + 7919).integers(30, 61) * 100)
+    height_mm = round(width_mm * img_h / img_w, -1)
+    scale = width_mm / img_w
+    truth = [{"type": CLASS_NAMES[cls], "x": round(x1 * scale, 1), "y": round(height_mm - y2 * scale, 1),
+              "w": round((x2 - x1) * scale, 1), "h": round((y2 - y1) * scale, 1)}
+             for cls, x1, y1, x2, y2 in boxes]
+    return image, width_mm, height_mm, truth

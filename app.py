@@ -21,7 +21,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from geometry_engine import DEFAULT_DIRECTION, DEFAULT_START_CORNER, GeometryEngine
 from layout_advisor import choose_layout
-from wall_synth import CLASS_NAMES, generate_wall
+from wall_synth import CLASS_NAMES, random_scene
 from cad_exporter import CADExporter
 from obstacle_detector import load_default_detector
 from rover_mission import compile_rover_mission, load_profile
@@ -397,14 +397,7 @@ def random_wall():
     if isinstance(density, bool) or not isinstance(density, (int, float)) or not 0.2 <= density <= 1.5:
         return jsonify({"success": False, "error": "density must be a number from 0.2 to 1.5"}), 400
 
-    image, boxes = generate_wall(seed, width=1200, density=float(density))
-    img_h, img_w = image.shape[:2]
-    width_mm = float(np.random.default_rng(seed + 7919).integers(30, 61) * 100)
-    height_mm = round(width_mm * img_h / img_w, -1)
-    scale = width_mm / img_w
-    truth = [{"type": CLASS_NAMES[cls], "x": round(x1 * scale, 1), "y": round(height_mm - y2 * scale, 1),
-              "w": round((x2 - x1) * scale, 1), "h": round((y2 - y1) * scale, 1)}
-             for cls, x1, y1, x2, y2 in boxes]
+    image, width_mm, height_mm, truth = random_scene(seed, float(density))
     planted = {name: sum(1 for t in truth if t["type"] == name) for name in CLASS_NAMES}
     _, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     return jsonify({
