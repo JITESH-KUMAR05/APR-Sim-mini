@@ -4,7 +4,8 @@ Train YOLO11n on training/data/yolo with the local GPU, then export ONNX in the 
     training/gpu/.venv/Scripts/python.exe training/gpu/train_gpu.py --epochs 50 --name apr_v1
 
 Exports to training/runs/<name>/weights/best.onnx (no NMS in the graph: obstacle_detector.py does it).
-Copying the file to models/apr_obstacles.onnx is a separate step (promote.py) after the evaluation.
+Copying the file to models/apr_obstacles.onnx is a separate step, done by hand after the evaluation and
+check_export.py (the exported model must give the same boxes as the PyTorch weights).
 """
 
 import argparse

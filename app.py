@@ -127,9 +127,13 @@ def count_unverified(obstacles):
 def resolve_layout(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
                    start_corner, direction):
     """Turn the operator's start corner and stripe direction (a value or "auto") into a concrete layout."""
+    limits = {}
+    if ROVER_PROFILE is not None:
+        limits = {"max_speed_mps": ROVER_PROFILE["max_speed_mps"],
+                  "pump_max_s": ROVER_PROFILE.get("pump_max_continuous_s", 30.0)}
     return choose_layout(
         geometry_engine, wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
-        start_corner, direction,
+        start_corner, direction, **limits,
     )
 
 
@@ -426,7 +430,9 @@ def simulate_rover():
         return jsonify({"success": False, "error": "Expected a JSON object"}), 400
 
     try:
-        sys.path.insert(0, os.path.join(BASE_DIR, "rover", "tools"))
+        tools_dir = os.path.join(BASE_DIR, "rover", "tools")
+        if tools_dir not in sys.path:
+            sys.path.insert(0, tools_dir)
         from sim_replay import SimulatorUnavailable, replay
     except ImportError:
         return jsonify({"success": False, "error": "The rover simulator is only available in the local app"}), 503
@@ -447,6 +453,10 @@ def simulate_rover():
         return jsonify({"success": False, "error": str(exc)}), 400
     except SimulatorUnavailable as exc:
         return jsonify({"success": False, "error": str(exc)}), 503
+    except AssertionError:
+        import traceback
+        traceback.print_exc()  # the compiler output stays in the server log
+        return jsonify({"success": False, "error": "The rover simulator could not be built here; see the server log"}), 500
     except Exception as exc:
         import traceback
         traceback.print_exc()

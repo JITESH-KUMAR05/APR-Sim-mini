@@ -60,7 +60,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default=str(ROOT / "models" / "apr_obstacles.onnx"))
     parser.add_argument("--sensitivity", type=float, default=0.5)
-    parser.add_argument("--out", default=str(ROOT / "training" / "EVAL_REPORT.md"))
+    parser.add_argument("--out", default=str(ROOT / "training" / "data" / "eval" / "report.md"),
+                        help="the committed training/EVAL_REPORT.md has hand-written sections: pass it only on purpose")
     args = parser.parse_args()
 
     detector = ObstacleDetector(model_path=args.model)
@@ -80,6 +81,7 @@ def main():
         print(f"== {name}: {description}")
         print(table(stats, summary))
         lines += [f"## {name}", "", description, "", table(stats, summary), ""]
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("wrote", args.out)
 

@@ -65,3 +65,32 @@ This is a demonstration on walls drawn by the same generator the model trained o
 ## What would make it work on real walls
 
 Real labelled photos of the four Indian-specific classes (`training/README.md`, sections 1 and 5): at least 40 to 80 labelled instances per class from the team's own photos, or a Roboflow dataset exported in YOLO format. Training can start from this version's weights.
+
+## Targets set before training: pass or fail
+
+| class | target (`training/README.md` section 6) | result on held-out real photos | verdict |
+|---|---|---|---|
+| window | recall at least 0.90 and precision at least 0.85 | recall 0.43, precision 0.57 (a lower bound) | **fail** |
+| door | recall at least 0.90 and precision at least 0.85 | recall 0.43, precision 0.26 (a lower bound) | **fail** |
+| ac_unit, meter_panel, pipe, grill | mAP50 at least 0.70 | cannot be measured on real photos: 52 teacher-made boxes, almost none found; a real AC was boxed as `grill` and `window` | **fail, needs the team's photos** |
+| nothing in a test photo gets no box at all (windows and doors) | none missed | 1,092 of 1,926 window boxes and 47 of 83 door boxes got no box | **fail** |
+
+The mAP50 values printed at the end of training (window 0.62, door 0.73, the four others about 0.95 to 0.98) are on a validation set that is 38% synthetic walls, which is why the four rare classes look good there. They are not real-photo numbers.
+
+## Model against the classical fallback on the same real photos
+
+Class-agnostic: a human window or door box counts as covered if a keep-out zone of any class (including `unverified`) covers at least half of it. Run with `training/compare_detectors.py`.
+
+| detector | window and door boxes covered | boxes over 3% of the photo covered | share of the photo marked keep-out |
+|---|---|---|---|
+| trained model v1 | 0.52 of 2,009 | 0.68 of 151 | 11% |
+| classical fallback | 0.85 of 2,009 | 0.72 of 151 | 63% |
+
+The classical detector looks better on coverage only because it marks 63% of the photo as keep-out, which leaves almost nothing to paint. For the boxes that are large enough to matter for a wall (over 3% of the photo) the two are close, and the model is not better. **On real photos the trained model is not yet an improvement that justifies relying on it; on walls drawn by the generator it is.**
+
+## Checks and known deviations
+
+- The exported ONNX matches the PyTorch weights: on 40 held-out photos the largest class score difference is 0.00000 and the largest box difference 0.005 px (`training/gpu/check_export.py`, same input tensor made by the app's letterbox).
+- Synthetic walls are 1,200 of 2,818 training images (43%), above the 30 to 40% the spec asked for. The validation set used to pick the best epoch is 150 synthetic of 395 images.
+- The share of teacher boxes that a person accepted on a contact sheet was not measured.
+- The train, validation and test split is by photo id. Near copies of one photo under different ids, if any exist in the public sets, were not searched for.

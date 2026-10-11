@@ -54,6 +54,9 @@ class TestRoverUi(unittest.TestCase):
         self.assertIn("function showSimReport(result)", js)
         self.assertIn("clearSimResult();", js)  # a changed plan must not keep the old replay on screen
         self.assertEqual(js.count("clearSimResult();"), 2)  # one call after analyze, one after replan
+        self.assertIn("simGeneration += 1;", js)  # a replay that was still running when the plan changed is dropped
+        self.assertIn("if (generation !== simGeneration)", js)
+        self.assertIn("return runAnalysis();", js)  # Random Wall stays disabled until the analysis is done
 
     def test_start_label_is_no_longer_hardcoded_to_the_origin(self):
         self.assertNotIn("START (0,0)", read("static", "app.js"))

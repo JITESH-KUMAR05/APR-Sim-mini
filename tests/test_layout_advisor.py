@@ -86,5 +86,35 @@ class TestChoose(unittest.TestCase):
         self.assertEqual(choice["start_corner"], "bottom_left")
 
 
+class TestRoverLimits(unittest.TestCase):
+    """The firmware refuses a spray MOVE that would run the pump over 30 s (about 7 m at 250 mm/s)."""
+
+    def test_a_tall_wall_gets_horizontal_stripes_because_vertical_ones_are_refused(self):
+        choice = choose_layout(GeometryEngine(), 5000.0, 8000.0, 250.0, 12.0, 60.0, [], "auto", "auto")
+        self.assertEqual(choice["direction"], "horizontal")
+        by = {(o["start_corner"], o["direction"]): o for o in choice["options"]}
+        self.assertFalse(by[("bottom_left", "vertical")]["feasible"])
+        self.assertTrue(by[("bottom_left", "horizontal")]["feasible"])
+        self.assertIn(choice["options"][0]["feasible"], (True,))
+
+    def test_feasible_layouts_sort_before_infeasible_ones(self):
+        options = evaluate_layouts(GeometryEngine(), 5000.0, 8000.0, 250.0, 12.0, 60.0, [])
+        flags = [o["feasible"] for o in options]
+        self.assertEqual(flags, sorted(flags, reverse=True))
+
+    def test_a_slower_rover_has_a_shorter_limit(self):
+        options = evaluate_layouts(GeometryEngine(), 4000.0, 2800.0, 250.0, 12.0, 60.0, [], max_speed_mps=0.1)
+        self.assertTrue(all(not o["feasible"] for o in options if o["direction"] == "horizontal"))  # 4 m > 2.8 m at 100 mm/s
+        self.assertTrue(any(o["feasible"] for o in options if o["direction"] == "vertical"))  # 2.8 m fits
+
+    def test_when_nothing_fits_the_reason_says_so_and_the_best_option_is_still_returned(self):
+        choice = choose_layout(GeometryEngine(), 20000.0, 20000.0, 250.0, 12.0, 60.0, [], "auto", "auto")
+        self.assertFalse(choice["options"][0]["feasible"])
+        self.assertIn("spray limit", choice["reason"])
+
+    def test_ordinary_walls_are_all_feasible(self):
+        self.assertTrue(all(o["feasible"] for o in options([WINDOW, DOOR])))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -66,6 +66,16 @@ class TestReplay(unittest.TestCase):
         self.assertIn("STEP_TIMEOUT", result["error"])
         self.assertLess(len(result["steps"]), len(mission()["steps"]))
 
+    def test_the_auto_layout_for_a_tall_wall_is_one_the_rover_accepts(self):
+        from layout_advisor import choose_layout
+
+        engine = GeometryEngine()
+        choice = choose_layout(engine, 5000.0, 8000.0, 250.0, 12.0, 60.0, [], "auto", "auto")
+        waypoints, stats = engine.plan_coverage_path(5000.0, 8000.0, 250.0, 12.0, 60.0, [], choice["start_corner"], choice["direction"])
+        m = compile_rover_mission(waypoints, 5000.0, 8000.0, 250.0, stats["effective_step_mm"], choice["start_corner"], load_profile())
+        result = replay(m, slip=0.0, gyro_bias=0.0)
+        self.assertTrue(result["ok"], result.get("error"))  # vertical stripes of 8 m would fail at step 1 with TOO_LONG
+
     def test_bad_numbers_are_refused_before_anything_runs(self):
         for kwargs in ({"slip": -0.1}, {"slip": 0.5}, {"gyro_bias": 5.0}, {"seed": -1}, {"slip": float("nan")}, {"seed": 1.5}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):

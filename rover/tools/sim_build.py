@@ -12,6 +12,7 @@ AssertionError and is never retried.
 import os
 import shutil
 import subprocess
+import threading
 from typing import Dict, List
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -20,6 +21,7 @@ SIM_DIR = os.path.join(ROOT, "rover", "sim")
 BUILD_DIR = os.path.join(SIM_DIR, "build")
 FLAGS = ["-std=c++11", "-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-fno-rtti", "-O2"]
 
+_lock = threading.Lock()  # two requests must not build the same executable at the same time
 _binaries: Dict[str, str] = {}
 _blocked: Dict[str, str] = {}
 
@@ -57,6 +59,11 @@ def _runs(binary: str, probe: str) -> bool:
 
 def build_program(name: str, sources: List[str], probe: str, attempts: int = 12) -> str:
     """Return the path of a runnable program built from `sources`, or raise SimulatorUnavailable."""
+    with _lock:
+        return _build_program(name, sources, probe, attempts)
+
+
+def _build_program(name: str, sources: List[str], probe: str, attempts: int) -> str:
     if name in _binaries:
         return _binaries[name]
     if name in _blocked:
@@ -78,7 +85,10 @@ def build_program(name: str, sources: List[str], probe: str, attempts: int = 12)
                 os.remove(binary)
             except OSError:
                 pass  # a locked old executable: g++ will say so if it cannot overwrite it
-        result = subprocess.run([gpp] + FLAGS + sources + ["-o", binary], capture_output=True, text=True)
+        try:
+            result = subprocess.run([gpp] + FLAGS + sources + ["-o", binary], capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            raise SimulatorUnavailable("g++ did not finish building the rover simulator within 180 s")
         if result.returncode != 0:
             raise AssertionError(f"the rover firmware does not compile:\n{result.stderr}")
         if _runs(binary, probe):

@@ -100,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let cornerPreviewUrl = null;
     let replanInFlight = false;
     let simResult = null; // the last rover simulator replay; cleared whenever the plan changes
+    let simGeneration = 0; // bumped whenever the plan changes, so a replay that was still running is dropped
 
     // Initialize 3D Viewer
     try {
@@ -172,7 +173,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return fetch(wall.image_data_url).then((res) => res.blob()).then((blob) => ({ wall, blob }));
         })
         .then(({ wall, blob }) => {
-            randomWallBtn.disabled = false;
             selectedFile = new File([blob], `random_wall_${wall.seed}.jpg`, { type: 'image/jpeg' });
             activeSampleId = null;
             resetCorners(true);
@@ -183,11 +183,13 @@ document.addEventListener('DOMContentLoaded', () => {
             fileNameDisplay.textContent = `Random wall #${wall.seed}`;
             const planted = Object.entries(wall.planted).filter(([, n]) => n > 0).map(([name, n]) => `${n} ${name}`).join(', ');
             appendLog(`Random wall #${wall.seed}, ${wall.width_mm} x ${wall.height_mm} mm. Hidden in it: ${planted || 'nothing'}`, 'info');
-            runAnalysis();
+            return runAnalysis(); // the button stays off until the analysis is done, so two walls cannot race
         })
         .catch((err) => {
+            appendLog(`Random wall error: ${String(err.message).replace(/[<>&]/g, ' ')}`, 'warn');
+        })
+        .finally(() => {
             randomWallBtn.disabled = false;
-            appendLog(`Random wall error: ${err.message}`, 'warn');
         });
     });
 
@@ -477,7 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
         generateBtn.disabled = true;
         generateBtn.textContent = 'Processing Geometry...';
 
-        fetch('/api/analyze', {
+        return fetch('/api/analyze', {
             method: 'POST',
             body: formData
         })
@@ -673,6 +675,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function clearSimResult() {
+        simGeneration += 1;
         simResult = null;
         simReport.style.display = 'none';
         simReport.innerHTML = '';
@@ -682,6 +685,8 @@ document.addEventListener('DOMContentLoaded', () => {
     simRoverBtn.addEventListener('click', () => {
         if (!currentData || replanInFlight) return;
         simRoverBtn.disabled = true;
+        const generation = simGeneration;
+        const plain = (text) => String(text).replace(/[<>&]/g, ' '); // server text goes into an HTML log line
         appendLog('Replaying the mission in the rover simulator...', 'info');
         fetch('/api/simulate_rover', {
             method: 'POST',
@@ -691,19 +696,23 @@ document.addEventListener('DOMContentLoaded', () => {
         .then((res) => res.json())
         .then((body) => {
             simRoverBtn.disabled = false;
+            if (generation !== simGeneration) {
+                appendLog('Rover simulator result dropped: the plan changed while it ran', 'info');
+                return;
+            }
             if (!body.success) {
-                appendLog(`Rover simulator: ${body.error}`, 'warn');
+                appendLog(`Rover simulator: ${plain(body.error)}`, 'warn');
                 return;
             }
             simResult = body;
             showSimReport(body);
             switchTab('2d');
             render2DCanvas();
-            appendLog(body.ok ? 'Rover simulator run finished' : `Rover simulator stopped: ${body.error}`, body.ok ? 'success' : 'warn');
+            appendLog(body.ok ? 'Rover simulator run finished' : `Rover simulator stopped: ${plain(body.error)}`, body.ok ? 'success' : 'warn');
         })
         .catch((err) => {
             simRoverBtn.disabled = false;
-            appendLog(`Rover simulator error: ${err.message}`, 'warn');
+            appendLog(`Rover simulator error: ${plain(err.message)}`, 'warn');
         });
     });
 
