@@ -1378,3 +1378,35 @@ footer strong {
 .param-group select:focus {
 	border-color: var(--cyan);
 }
+
+/* Layout advice: why the planner picked this corner and direction */
+.layout-advice {
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	padding: 8px 10px;
+	margin-bottom: 12px;
+	font: 11px 'DM Mono', monospace;
+	color: var(--text);
+}
+
+.layout-advice p {
+	margin: 0 0 6px;
+	line-height: 1.4;
+}
+
+.layout-advice table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.layout-advice th,
+.layout-advice td {
+	text-align: left;
+	padding: 2px 4px;
+	border-bottom: 1px solid var(--line);
+}
+
+.layout-advice tr.chosen td {
+	color: var(--cyan);
+	font-weight: bold;
+}

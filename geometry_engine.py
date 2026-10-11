@@ -32,6 +32,11 @@ LEGACY_OBSTACLE_INFO = {  # types still emitted by the classical fallback
 }
 START_CORNERS = ("bottom_left", "bottom_right", "top_left", "top_right")
 DEFAULT_START_CORNER = "bottom_left"  # the rover's (0,0)
+DIRECTIONS = ("horizontal", "vertical")  # stripe direction
+DEFAULT_DIRECTION = "horizontal"
+# A start corner seen from the transposed wall (x and y swapped): (0,0) stays, (W,0) becomes top-left, ...
+_TRANSPOSED_CORNER = {"bottom_left": "bottom_left", "bottom_right": "top_left",
+                      "top_left": "bottom_right", "top_right": "top_right"}
 
 
 class GeometryEngine:
@@ -366,6 +371,15 @@ class GeometryEngine:
             raise ValueError(f"start_corner must be one of {', '.join(START_CORNERS)}")
         return raw
 
+    @staticmethod
+    def parse_direction(raw: Any) -> str:
+        """Return a valid stripe direction. A missing or empty value means horizontal."""
+        if raw is None or raw == "":
+            return DEFAULT_DIRECTION
+        if not isinstance(raw, str) or raw not in DIRECTIONS:
+            raise ValueError(f"direction must be one of {', '.join(DIRECTIONS)}")
+        return raw
+
     def plan_coverage_path(
         self,
         wall_w_mm: float,
@@ -374,15 +388,27 @@ class GeometryEngine:
         overlap_pct: float,
         safety_buffer_mm: float,
         obstacles: List[Dict[str, Any]],
-        start_corner: str = DEFAULT_START_CORNER
+        start_corner: str = DEFAULT_START_CORNER,
+        direction: str = DEFAULT_DIRECTION,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Boustrophedon coverage that starts in the given wall corner: rows progress away from
         the start side and the first pass runs from the start corner across the wall.
         The path is planned from the top-left and mirrored, so obstacles are mirrored into
         that frame first (copies, the caller's dicts are not changed).
+        direction "vertical" plans the same pattern on the transposed wall (x and y swapped) and
+        swaps the result back, so the stripes run up and down.
         """
         start_corner = self.parse_start_corner(start_corner)
+        if self.parse_direction(direction) == "vertical":
+            swapped = [dict(obs, x=obs["y"], y=obs["x"], w=obs["h"], h=obs["w"]) for obs in obstacles]
+            waypoints, stats = self.plan_coverage_path(
+                wall_h_mm, wall_w_mm, spray_width_mm, overlap_pct, safety_buffer_mm, swapped,
+                _TRANSPOSED_CORNER[start_corner], "horizontal",
+            )
+            for wp in waypoints:
+                wp["x"], wp["y"] = wp["y"], wp["x"]
+            return waypoints, stats
         flip_x = start_corner.endswith("right")
         flip_y = start_corner.startswith("bottom")
         if not (flip_x or flip_y):

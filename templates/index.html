@@ -115,12 +115,24 @@
 					<div class="param-group">
 						<label for="startCorner">Rover Start Corner</label>
 						<select id="startCorner">
-							<option value="bottom_left" selected>Bottom-left (0,0)</option>
+							<option value="auto" selected>Auto (best for this wall)</option>
+							<option value="bottom_left">Bottom-left (0,0)</option>
 							<option value="bottom_right">Bottom-right</option>
 							<option value="top_left">Top-left</option>
 							<option value="top_right">Top-right</option>
 						</select>
 					</div>
+
+					<div class="param-group">
+						<label for="stripeDirection">Stripe Direction</label>
+						<select id="stripeDirection">
+							<option value="auto" selected>Auto (best for this wall)</option>
+							<option value="horizontal">Horizontal rows</option>
+							<option value="vertical">Vertical columns</option>
+						</select>
+					</div>
+
+					<div class="layout-advice" id="layoutAdvice" style="display:none;"></div>
 
 					<button class="primary-btn" id="generate">Generate Wall Map & CAD &nbsp;→</button>
 				</div>

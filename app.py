@@ -17,7 +17,8 @@ from flask import Flask, render_template, request, jsonify, send_file, send_from
 from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from geometry_engine import DEFAULT_START_CORNER, GeometryEngine
+from geometry_engine import DEFAULT_DIRECTION, DEFAULT_START_CORNER, GeometryEngine
+from layout_advisor import choose_layout
 from cad_exporter import CADExporter
 from obstacle_detector import load_default_detector
 from rover_mission import compile_rover_mission, load_profile
@@ -120,12 +121,22 @@ def count_unverified(obstacles):
     return sum(1 for obs in obstacles if obs.get("type") == "unverified")
 
 
+def resolve_layout(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+                   start_corner, direction):
+    """Turn the operator's start corner and stripe direction (a value or "auto") into a concrete layout."""
+    return choose_layout(
+        geometry_engine, wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+        start_corner, direction,
+    )
+
+
 def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
-                  start_corner=DEFAULT_START_CORNER):
+                  start_corner=DEFAULT_START_CORNER, direction=DEFAULT_DIRECTION):
     """Plan coverage, compute metrics, write every export file and refresh the session cache."""
     start_corner = GeometryEngine.parse_start_corner(start_corner)
+    direction = GeometryEngine.parse_direction(direction)
     waypoints, path_stats = geometry_engine.plan_coverage_path(
-        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
+        wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner, direction
     )
     metrics = geometry_engine.compute_metrics(
         wall_w_mm, wall_h_mm, obstacles, path_stats,
@@ -190,6 +201,7 @@ def build_mission(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buff
         "metrics": metrics,
         "stats": path_stats,
         "start_corner": start_corner,
+        "direction": direction,
     })
     return waypoints, path_stats, metrics
 
@@ -210,7 +222,12 @@ def analyze_wall():
         safety_buffer_mm = float(request.form.get("safety_buffer_mm", 60.0))
         sensitivity = float(request.form.get("sensitivity", 0.5))
         sample_id = request.form.get("sample_id", None)
-        start_corner = geometry_engine.parse_start_corner(request.form.get("start_corner"))
+        requested_corner = request.form.get("start_corner")
+        requested_direction = request.form.get("direction")
+        for value, parse in ((requested_corner, geometry_engine.parse_start_corner),
+                             (requested_direction, geometry_engine.parse_direction)):
+            if value != "auto":
+                parse(value)  # reject a bad value before any work is done
 
         wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm = _sanitize_wall_params(
             wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm
@@ -256,9 +273,12 @@ def analyze_wall():
         obstacles = detection["obstacles"]
         confidence = detection["confidence"]
 
-        # 3. Plan coverage, compute metrics, write exports
+        # 3. Choose the layout, plan coverage, compute metrics, write exports
+        layout = resolve_layout(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+                                requested_corner, requested_direction)
+        start_corner, direction = layout["start_corner"], layout["direction"]
         waypoints, path_stats, metrics = build_mission(
-            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner, direction
         )
         current_session["confidence"] = confidence
 
@@ -286,8 +306,10 @@ def analyze_wall():
                 "spray_width_mm": spray_width_mm,
                 "overlap_pct": overlap_pct,
                 "safety_buffer_mm": safety_buffer_mm,
-                "start_corner": start_corner
+                "start_corner": start_corner,
+                "direction": direction
             },
+            "layout": layout,
             "obstacles": obstacles,
             "waypoints": waypoints,
             "stats": path_stats,
@@ -323,13 +345,16 @@ def replan():
             float(payload["safety_buffer_mm"]),
         )
         obstacles = geometry_engine.normalize_obstacles(payload.get("obstacles"), wall_w_mm, wall_h_mm)
-        start_corner = geometry_engine.parse_start_corner(payload.get("start_corner"))
+        layout = resolve_layout(wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+                                payload.get("start_corner"), payload.get("direction"))
 
         waypoints, path_stats, metrics = build_mission(
-            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+            layout["start_corner"], layout["direction"]
         )
         return jsonify({
             "success": True,
+            "layout": layout,
             "obstacles": obstacles,
             "waypoints": waypoints,
             "stats": path_stats,

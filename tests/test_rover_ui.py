@@ -31,6 +31,20 @@ class TestRoverUi(unittest.TestCase):
         self.assertIn("startCorner = currentData.wall.start_corner", js)
         self.assertIn("startCornerInput.addEventListener('change'", js)
 
+    def test_page_and_script_offer_auto_layout_and_show_the_reason(self):
+        html = app_module.app.test_client().get("/").get_data(as_text=True)
+        self.assertIn('id="stripeDirection"', html)
+        self.assertIn('id="layoutAdvice"', html)
+        self.assertEqual(html.count('value="auto"'), 2)  # start corner and stripe direction
+        js = read("static", "app.js")
+        self.assertIn("formData.append('direction', directionInput.value);", js)
+        self.assertIn("direction: directionInput.value,", js)
+        self.assertIn("function showLayout(layout)", js)
+        self.assertIn("showLayout(data.layout);", js)
+        self.assertIn("showLayout(body.layout);", js)
+        self.assertIn("directionInput.addEventListener('change'", js)
+        self.assertNotIn("layoutAdvice.innerHTML = layout", js)  # reasons are inserted as text, never as markup
+
     def test_start_label_is_no_longer_hardcoded_to_the_origin(self):
         self.assertNotIn("START (0,0)", read("static", "app.js"))
 

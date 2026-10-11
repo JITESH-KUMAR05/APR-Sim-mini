@@ -38,6 +38,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const bufferInput = $('safetyBuffer');
     const sensitivityInput = $('sensitivity');
     const startCornerInput = $('startCorner');
+    const directionInput = $('stripeDirection');
+    const layoutAdvice = $('layoutAdvice');
 
     // Value display spans
     const widthVal = $('widthValue');
@@ -239,6 +241,12 @@ document.addEventListener('DOMContentLoaded', () => {
         replan(currentData.obstacles, startCornerInput.value);
     });
 
+    // Changing the stripe direction after Generate re-plans in the same way
+    directionInput.addEventListener('change', () => {
+        if (!currentData || replanInFlight) return;
+        replan(currentData.obstacles, startCornerInput.value);
+    });
+
     // Export buttons
     document.querySelectorAll('[data-export]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -420,6 +428,7 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('safety_buffer_mm', bufferInput.value);
         formData.append('sensitivity', sensitivityInput.value);
         formData.append('start_corner', startCornerInput.value);
+        formData.append('direction', directionInput.value);
 
         if (selectedFile) {
             formData.append('file', selectedFile);
@@ -455,6 +464,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             currentData = data;
             refreshViews(data);
+            showLayout(data.layout);
 
             // Pre-load image for 2D Canvas
             if (data.image_data_url) {
@@ -621,7 +631,36 @@ document.addEventListener('DOMContentLoaded', () => {
         const obstacles = currentData.obstacles
             .map((obs) => (obs.id === id ? (newType ? { ...obs, type: newType } : null) : obs))
             .filter(Boolean);
-        replan(obstacles);
+        replan(obstacles, startCornerInput.value);
+    }
+
+    // Why the planner chose this corner and direction, with every layout it scored
+    function showLayout(layout) {
+        layoutAdvice.innerHTML = '';
+        if (!layout) {
+            layoutAdvice.style.display = 'none';
+            return;
+        }
+        const reason = document.createElement('p');
+        reason.textContent = layout.reason;
+        layoutAdvice.appendChild(reason);
+        const table = document.createElement('table');
+        const head = table.insertRow();
+        ['#', 'Layout', 'Cross', 'Dry m', 'Turns'].forEach((text) => {
+            const th = document.createElement('th');
+            th.textContent = text;
+            head.appendChild(th);
+        });
+        layout.options.forEach((option) => {
+            const row = table.insertRow();
+            if (option.start_corner === layout.start_corner && option.direction === layout.direction) row.className = 'chosen';
+            [option.rank, `${option.direction} ${option.start_corner.replace('_', '-')}`, option.crossings,
+                option.transit_m.toFixed(1), option.turns].forEach((value) => {
+                row.insertCell().textContent = String(value);
+            });
+        });
+        layoutAdvice.appendChild(table);
+        layoutAdvice.style.display = 'block';
     }
 
     function replan(obstacles, startCorner = currentData.wall.start_corner) {
@@ -640,6 +679,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 overlap_pct: wall.overlap_pct,
                 safety_buffer_mm: wall.safety_buffer_mm,
                 start_corner: startCorner,
+                direction: directionInput.value,
                 obstacles
             })
         })
@@ -648,7 +688,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!ok || !body.success) throw new Error(body.error || 'Re-plan failed');
             currentData = {
                 ...currentData,
-                wall: { ...currentData.wall, start_corner: startCorner },
+                wall: { ...currentData.wall, start_corner: body.layout.start_corner, direction: body.layout.direction },
+                layout: body.layout,
                 obstacles: body.obstacles,
                 waypoints: body.waypoints,
                 stats: body.stats,
@@ -656,6 +697,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 needs_review: body.needs_review
             };
             refreshViews(currentData);
+            showLayout(body.layout);
             render2DCanvas();
             appendLog(`Mission re-planned: ${body.obstacles.length} keep-out zones, ${body.waypoints.length} waypoints`, 'success');
             replanInFlight = false;
