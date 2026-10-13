@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const directionInput = $('stripeDirection');
     const layoutAdvice = $('layoutAdvice');
     const simRoverBtn = $('simRoverBtn');
+    const keepCorrectionsInput = $('keepCorrections');
     const simReport = $('simReport');
 
     // Value display spans
@@ -781,6 +782,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 safety_buffer_mm: wall.safety_buffer_mm,
                 start_corner: startCorner,
                 direction: directionInput.value,
+                review_token: currentData.review_token,
+                save_corrections: keepCorrectionsInput.checked,
                 obstacles
             })
         })
@@ -800,6 +803,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clearSimResult();
             refreshViews(currentData);
             showLayout(body.layout);
+            if (body.correction_saved) appendLog('Your review was saved as a labelled photo in exports/corrections on this computer, for the next training round', 'info');
             render2DCanvas();
             appendLog(`Mission re-planned: ${body.obstacles.length} keep-out zones, ${body.waypoints.length} waypoints`, 'success');
             replanInFlight = false;

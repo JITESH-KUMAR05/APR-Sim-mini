@@ -6,6 +6,7 @@ Pair-programmed for presentation & engineering demonstration.
 
 import os
 import secrets
+import uuid
 import sys
 import io
 import logging
@@ -20,6 +21,7 @@ from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from geometry_engine import DEFAULT_DIRECTION, DEFAULT_START_CORNER, GeometryEngine
+import corrections
 from layout_advisor import choose_layout
 from wall_synth import CLASS_NAMES, random_scene
 from cad_exporter import CADExporter
@@ -35,6 +37,7 @@ if os.environ.get("VERCEL") or not os.access(BASE_DIR, os.W_OK):
     EXPORTS_DIR = os.path.join("/tmp", "exports")
 else:
     EXPORTS_DIR = os.path.join(BASE_DIR, "exports")
+CORRECTIONS_DIR = os.path.join(EXPORTS_DIR, "corrections")  # operator corrections, saved as labelled photos
 SAMPLES_DIR = os.path.join(BASE_DIR, "samples")
 os.makedirs(EXPORTS_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
@@ -288,6 +291,14 @@ def analyze_wall():
             wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner, direction
         )
         current_session["confidence"] = confidence
+        review_token = uuid.uuid4().hex
+        current_session["review"] = {  # what the detector said, so a later change by the operator can be saved
+            "token": review_token, "image": img_bgr, "width_mm": wall_w_mm, "height_mm": wall_h_mm,
+            "detected": [dict(o) for o in obstacles],
+            # only real photos taught by a person are worth keeping: not the built-in samples, not Random Wall
+            "keepable": "file" in request.files and request.files["file"].filename != ""
+                        and not str(source_name).startswith("random_wall_"),
+        }
 
         # Encode image to base64 for 2D canvas overlay
         # Resize to max 1200px wide for snappy UI responsiveness
@@ -317,6 +328,7 @@ def analyze_wall():
                 "direction": direction
             },
             "layout": layout,
+            "review_token": review_token,
             "obstacles": obstacles,
             "waypoints": waypoints,
             "stats": path_stats,
@@ -334,6 +346,30 @@ def analyze_wall():
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+def corrections_allowed():
+    """Saving operator corrections is off on a deployment (no disk worth keeping) and by APR_SAVE_CORRECTIONS=0."""
+    return not os.environ.get("VERCEL") and os.environ.get("APR_SAVE_CORRECTIONS", "1") != "0"
+
+
+def save_correction_if_changed(wall_w_mm, wall_h_mm, obstacles, token, wanted):
+    """
+    Keep the operator's review of the photo they analysed as a labelled training sample. The token proves the review
+    belongs to the photo this operator analysed (the session is shared by every tab). Never fails the request.
+    """
+    review = current_session.get("review")
+    if not wanted or not corrections_allowed() or not review or not review.get("keepable"):
+        return False
+    if token != review["token"] or (review["width_mm"], review["height_mm"]) != (wall_w_mm, wall_h_mm):
+        return False
+    try:
+        if corrections.same_obstacles(review["detected"], obstacles):
+            return False
+        return corrections.save_correction(CORRECTIONS_DIR, review["image"], obstacles, wall_w_mm, wall_h_mm) is not None
+    except Exception as exc:  # a failed save must never fail the replan
+        log.warning("could not save the correction: %s", exc)
+        return False
 
 
 @app.route("/api/replan", methods=["POST"])
@@ -361,6 +397,8 @@ def replan():
         )
         return jsonify({
             "success": True,
+            "correction_saved": save_correction_if_changed(
+                wall_w_mm, wall_h_mm, obstacles, payload.get("review_token"), payload.get("save_corrections") is True),
             "layout": layout,
             "obstacles": obstacles,
             "waypoints": waypoints,

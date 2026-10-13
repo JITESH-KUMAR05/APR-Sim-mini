@@ -33,7 +33,7 @@ def main():
         epochs=args.epochs,
         imgsz=args.imgsz,
         batch=args.batch,
-        patience=12,
+        patience=20,
         device=0,
         workers=4,
         project=os.path.join(ROOT, "training", "runs"),

@@ -1410,3 +1410,16 @@ footer strong {
 	color: var(--cyan);
 	font-weight: bold;
 }
+
+.keep-note {
+	display: block;
+	margin: 0 0 12px;
+	font: 11px 'DM Mono', monospace;
+	color: var(--muted);
+	line-height: 1.4;
+}
+
+.keep-note input {
+	margin-right: 6px;
+	vertical-align: middle;
+}
