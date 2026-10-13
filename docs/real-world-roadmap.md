@@ -48,8 +48,8 @@ So public data will never be enough for `grill`, `meter_panel` and wall `pipe`. 
 2. **Pre-label with the machine.** The teacher model (OWLv2, already in `training/gpu/`) proposes boxes. A person then corrects them in [CVAT](https://www.cvat.ai/) or Label Studio. Foundation-model labels are good for big objects and poor for small, rare or hard-to-describe ones, so every box is reviewed; a [Roboflow](https://blog.roboflow.com/launch-auto-label/) note makes the same point (full automation of labelling is not realistic yet).
 3. **Label by class, exactly as the app names them:** window, door, ac_unit, meter_panel, pipe, grill. Export in YOLO format.
 4. **Ingest and retrain** (one command each, 3.3). Hold out 20% of the team's photos as a test set that is never trained on, and never tune thresholds on it.
-5. **Active learning loop.** Run the model on new photos, keep the ones where it is unsure or wrong (low score, or the operator corrected it in the review panel), label those first. Each round of 100 photos is cheaper and worth more than 100 random ones. The web app already records what the operator confirms or dismisses; saving those corrections as new labels is a small piece of work (about a day) and turns every real job into training data.
-6. **Gate before trusting a model on a wall:** window and door recall at least 0.90 and precision at least 0.85 on the team's held-out photos for boxes that are at least 3% of the photo (the targets already set in `training/README.md`), and mAP50 at least 0.70 on each rare class. Below that the app keeps asking the operator to review.
+5. **Active learning loop.** Run the model on new photos, keep the ones where it is unsure or wrong (low score, or the operator corrected it in the review panel), label those first. Each round of 100 photos is cheaper and worth more than 100 random ones. The app now saves what the operator changes in the review panel, for an uploaded photo, as a labelled sample in `exports/corrections` (on the local app only; a tick box in the page switches it off; see `corrections.py` for what it keeps and the privacy warning). Look at a contact sheet of a batch before training on it: untouched confident detections are saved as labels too.
+6. **Gate before trusting a model on a wall:** window and door recall at least 0.90 and precision at least 0.85 on the team's held-out photos (the targets in `training/README.md`: recall 0.90 and precision 0.85 for window and door, mAP50 0.70 for each rare class, and nothing missed outright for windows and doors). Measure the large boxes (at least 3% of the photo) separately, because tiny far-away windows are not what the rover paints around. Below that the app keeps asking the operator to review.
 
 Rule that does not change: a doubtful detection becomes an `unverified` obstacle and is still avoided. A missed obstacle (paint on a window) costs more than a false one.
 
@@ -95,7 +95,7 @@ Follow `docs/rover-hardware-requirements.md`. The order, with the pass condition
 | 4 | Real wall photo to real paint on the floor | the whole chain on a wall the model has never seen, with the operator's review step |
 | 5 | Vertical wall | separate spec, written safety review by someone outside the team, low-height trials first |
 
-Software that can be done before the parts arrive (no hardware needed): the Pi agent against the simulator (P3), saving operator corrections as labels (3.2), the ArUco scale check (4), the real-photo capture and labelling (3.2), and a log format for run data (6).
+Software that can be done before the parts arrive (no hardware needed): the Pi agent against the simulator (P3), the ArUco scale check (4), the real-photo capture and labelling (3.2), and a log format for run data (6).
 
 ## 6. What "autonomous and smart" can honestly mean here
 
@@ -121,7 +121,7 @@ The safety rule stays at every level: the Arduino enforces limits, the e-stop is
 1. Week 1: buy the Stage 0 parts; photograph 200 to 300 walls; create a free Roboflow or CVAT account; one person downloads BFA-3D by hand.
 2. Week 2: label the photos (about 2 hours per 100 photos with machine pre-labels); retrain; read the report.
 3. Week 3: Stage 0 on the bench; build the firmware for the Mega (P2b).
-4. Week 4: Stage 1 on the floor; save operator corrections as labels; add the ArUco check.
+4. Week 4: Stage 1 on the floor; add the ArUco check; collect the corrections the app saved and label from them.
 
 ## Sources
 

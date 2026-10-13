@@ -51,9 +51,9 @@ def main():
     labels = ROOT / "training" / "data" / "eval" / "real_human" / "labels"
     model = GeometryEngine(detector=ObstacleDetector(model_path=str(ROOT / "models" / "apr_obstacles.onnx")))
     classical = GeometryEngine(detector=None)
-    print("| detector | window/door boxes covered | boxes over 3% of the photo covered | share of the photo marked keep-out |")
+    print("| detector | human boxes covered (window, door, ac_unit) | boxes over 3% of the photo covered | share of the photo marked keep-out |")
     print("|---|---|---|---|")
-    for name, engine in (("trained model v1", model), ("classical fallback", classical)):
+    for name, engine in (("trained model (models/apr_obstacles.onnx)", model), ("classical fallback", classical)):
         covered, covered_big, share, planted, planted_big = measure(engine, images, labels)
         print(f"| {name} | {covered:.2f} of {planted} | {covered_big:.2f} of {planted_big} | {share * 100:.0f}% |")
 

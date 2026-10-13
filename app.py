@@ -6,6 +6,7 @@ Pair-programmed for presentation & engineering demonstration.
 
 import os
 import secrets
+import uuid
 import sys
 import io
 import logging
@@ -290,9 +291,13 @@ def analyze_wall():
             wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner, direction
         )
         current_session["confidence"] = confidence
+        review_token = uuid.uuid4().hex
         current_session["review"] = {  # what the detector said, so a later change by the operator can be saved
-            "image": img_bgr, "width_mm": wall_w_mm, "height_mm": wall_h_mm,
+            "token": review_token, "image": img_bgr, "width_mm": wall_w_mm, "height_mm": wall_h_mm,
             "detected": [dict(o) for o in obstacles],
+            # only real photos taught by a person are worth keeping: not the built-in samples, not Random Wall
+            "keepable": "file" in request.files and request.files["file"].filename != ""
+                        and not str(source_name).startswith("random_wall_"),
         }
 
         # Encode image to base64 for 2D canvas overlay
@@ -323,6 +328,7 @@ def analyze_wall():
                 "direction": direction
             },
             "layout": layout,
+            "review_token": review_token,
             "obstacles": obstacles,
             "waypoints": waypoints,
             "stats": path_stats,
@@ -342,16 +348,26 @@ def analyze_wall():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-def save_correction_if_changed(wall_w_mm, wall_h_mm, obstacles):
-    """Keep the operator's review of the last analysed photo as a labelled training sample. Never fails the request."""
+def corrections_allowed():
+    """Saving operator corrections is off on a deployment (no disk worth keeping) and by APR_SAVE_CORRECTIONS=0."""
+    return not os.environ.get("VERCEL") and os.environ.get("APR_SAVE_CORRECTIONS", "1") != "0"
+
+
+def save_correction_if_changed(wall_w_mm, wall_h_mm, obstacles, token, wanted):
+    """
+    Keep the operator's review of the photo they analysed as a labelled training sample. The token proves the review
+    belongs to the photo this operator analysed (the session is shared by every tab). Never fails the request.
+    """
     review = current_session.get("review")
-    if not review or (review["width_mm"], review["height_mm"]) != (wall_w_mm, wall_h_mm):
+    if not wanted or not corrections_allowed() or not review or not review.get("keepable"):
         return False
-    if corrections.same_obstacles(review["detected"], obstacles):
+    if token != review["token"] or (review["width_mm"], review["height_mm"]) != (wall_w_mm, wall_h_mm):
         return False
     try:
+        if corrections.same_obstacles(review["detected"], obstacles):
+            return False
         return corrections.save_correction(CORRECTIONS_DIR, review["image"], obstacles, wall_w_mm, wall_h_mm) is not None
-    except OSError as exc:
+    except Exception as exc:  # a failed save must never fail the replan
         log.warning("could not save the correction: %s", exc)
         return False
 
@@ -381,7 +397,8 @@ def replan():
         )
         return jsonify({
             "success": True,
-            "correction_saved": save_correction_if_changed(wall_w_mm, wall_h_mm, obstacles),
+            "correction_saved": save_correction_if_changed(
+                wall_w_mm, wall_h_mm, obstacles, payload.get("review_token"), payload.get("save_corrections") is True),
             "layout": layout,
             "obstacles": obstacles,
             "waypoints": waypoints,

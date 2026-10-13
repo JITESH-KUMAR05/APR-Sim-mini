@@ -162,18 +162,19 @@ def purge(index, source):
 
 
 def from_lvis(index):
-    purge(index, "lvis")
     base = os.path.join(DATA, "staging", "lvis")
     folder = os.path.join(base, "images")
-    count = 0
     if not os.path.isdir(folder):
-        return 0
+        return 0  # nothing to rebuild from: keep what is in the pool instead of purging it
+    purge(index, "lvis")
+    count = 0
     for name in sorted(os.listdir(folder)):
+        label_path = os.path.join(base, "labels", name[:-4] + ".txt")
         image = cv2.imread(os.path.join(folder, name))
-        if image is None:
-            continue
+        if image is None or not os.path.exists(label_path):
+            continue  # a half-finished download: the image without its label
         boxes = []
-        for line in open(os.path.join(base, "labels", name[:-4] + ".txt")):
+        for line in open(label_path):
             cls, cx, cy, w, h = line.split()
             if int(cls) in LVIS_CLASSES:
                 boxes.append((int(cls), float(cx), float(cy), float(w), float(h)))
@@ -184,42 +185,104 @@ def from_lvis(index):
     return count
 
 
+APP_CLASSES = ["window", "door", "ac_unit", "meter_panel", "pipe", "grill"]
+BUILT_IN_SOURCES = {"oi", "cmp", "ade", "lvis"}
+
+
 def parse_mapping(text):
     """'ac=ac_unit,window=window' -> {'ac': 2, 'window': 0}"""
-    names = ["window", "door", "ac_unit", "meter_panel", "pipe", "grill"]
     mapping = {}
     for pair in text.split(","):
         source, _, target = pair.partition("=")
-        if target.strip() not in names:
-            raise ValueError(f"unknown app class {target!r}; use one of {names}")
-        mapping[source.strip().lower()] = names.index(target.strip())
+        if target.strip() not in APP_CLASSES:
+            raise ValueError(f"unknown app class {target!r}; use one of {APP_CLASSES}")
+        mapping[source.strip().lower()] = APP_CLASSES.index(target.strip())
     return mapping
 
 
+def _clean_name(text):
+    text = re.sub(r"\s+#.*$", "", text.strip())  # a trailing comment
+    return text.strip().strip("'\"").strip()
+
+
 def read_names(path):
-    """The class names of a YOLO data.yaml: a flow list ['a', 'b'], a block list (- a) or a numbered block (0: a)."""
+    """
+    The class names of a YOLO data.yaml, in class-id order. Handles a flow list ['a', 'b'] (also over several
+    lines), an inline dict {0: a, 1: b}, a block list (- a) and a numbered block (0: a), with trailing comments.
+    """
     text = open(path, encoding="utf-8").read()
     match = re.search(r"^names[ \t]*:[ \t]*(.*)$", text, re.M)
     if match is None:
         raise ValueError(f"{path} has no names")
     rest = match.group(1).strip()
-    if rest.startswith("["):
-        inner = rest[1:rest.index("]")] if "]" in rest else rest[1:]
-        return [item.strip().strip("'\"") for item in inner.split(",") if item.strip()]
+    if rest.startswith(("[", "{")):
+        opener = rest[0]
+        closer = "]" if opener == "[" else "}"
+        body = text[match.start(1):]
+        end = body.find(closer)
+        inner = body[1:end] if end >= 0 else body[1:]
+        items = [item for item in inner.split(",") if item.strip()]
+        if opener == "[":
+            return [_clean_name(item) for item in items]
+        named = {}
+        for item in items:
+            key, _, value = item.partition(":")
+            named[int(key.strip())] = _clean_name(value)
+        return [named[k] for k in sorted(named)]
     names = {}
     for line in text[match.end():].splitlines():
-        if line.strip() and not line.startswith((" ", "-", "	")):
+        if line.strip() and not line.startswith((" ", "-", "\t")):
             break
-        item = re.match(r"\s*(?:(\d+)\s*:|-)\s*['\"]?([^'\"]+?)['\"]?\s*$", line)
+        item = re.match(r"\s*(?:(\d+)\s*:|-)\s*(.+?)\s*$", line)
         if item:
-            names[int(item.group(1)) if item.group(1) is not None else len(names)] = item.group(2)
+            names[int(item.group(1)) if item.group(1) is not None else len(names)] = _clean_name(item.group(2))
     return [names[k] for k in sorted(names)]
 
 
+def split_key(source, stem):
+    """
+    The key a photo is split by. Roboflow exports augmented copies of one photo as name_jpg.rf.<hash>; they all
+    share one key, so copies of one photo can never end up on both sides of the train and test split.
+    """
+    base = re.sub(r"[._]rf[._][0-9a-fA-F]+$", "", stem)
+    base = re.sub(r"_(jpg|jpeg|png)$", "", base, flags=re.I)
+    return f"{source}_{base}"
+
+
+def _box_from_fields(fields, remap):
+    """A normalised (class, cx, cy, w, h) from a YOLO label line, or None. Polygons become their bounding box."""
+    if len(fields) < 5:
+        return None
+    cls = int(float(fields[0]))
+    if cls not in remap:
+        return None
+    values = [float(v) for v in fields[1:]]
+    if len(values) >= 6 and len(values) % 2 == 0:  # a polygon: x1 y1 x2 y2 x3 y3 ...
+        xs, ys = values[0::2], values[1::2]
+        x1, x2, y1, y2 = min(xs), max(xs), min(ys), max(ys)
+        cx, cy, w, h = (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1
+    else:  # a box; a sixth value, if any, is a confidence and is ignored
+        cx, cy, w, h = values[:4]
+    x1, x2 = max(0.0, cx - w / 2), min(1.0, cx + w / 2)
+    y1, y2 = max(0.0, cy - h / 2), min(1.0, cy + h / 2)
+    if x2 - x1 < 0.002 or y2 - y1 < 0.002:
+        return None
+    return (remap[cls], (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1)
+
+
 def from_yolo_export(index, source, folder, mapping, keep_empty=False):
-    """Add a YOLO-format dataset. All its splits are pooled and split again by hash, so test photos stay test photos."""
+    """
+    Add a YOLO-format dataset. All its splits are pooled and split again by hash of the photo's key, so test
+    photos stay test photos. Export WITHOUT augmentation anyway: augmented copies add nothing a re-run of the
+    training does not already do. Raises if the mapping matches none of the dataset's class names.
+    """
+    if not re.fullmatch(r"[a-z0-9_]+", source) or source in BUILT_IN_SOURCES:
+        raise ValueError(f"source name {source!r} must be lower-case letters, digits and underscores, and not one of {sorted(BUILT_IN_SOURCES)}")
     names = read_names(os.path.join(folder, "data.yaml"))
     remap = {i: mapping[n.lower()] for i, n in enumerate(names) if n.lower() in mapping}
+    unknown = sorted(set(mapping) - {n.lower() for n in names})
+    if not remap or unknown:
+        raise ValueError(f"the mapping does not fit the dataset: names read from data.yaml are {names}; not found: {unknown or sorted(mapping)}")
     count = 0
     for part in ("train", "valid", "val", "test"):
         images = os.path.join(folder, part, "images")
@@ -231,24 +294,21 @@ def from_yolo_export(index, source, folder, mapping, keep_empty=False):
             image = cv2.imread(os.path.join(images, name))
             if image is None:
                 continue
+            stem = os.path.splitext(name)[0]
             boxes = []
-            label_path = os.path.join(folder, part, "labels", os.path.splitext(name)[0] + ".txt")
+            label_path = os.path.join(folder, part, "labels", stem + ".txt")
             if os.path.exists(label_path):
                 for line in open(label_path):
-                    fields = line.split()
-                    if len(fields) < 5 or int(float(fields[0])) not in remap:
-                        continue
-                    if len(fields) > 5:  # a polygon: take its bounding box
-                        xs, ys = [float(v) for v in fields[1::2]], [float(v) for v in fields[2::2]]
-                        x1, x2, y1, y2 = min(xs), max(xs), min(ys), max(ys)
-                        boxes.append((remap[int(float(fields[0]))], (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1))
-                    else:
-                        boxes.append((remap[int(float(fields[0]))],) + tuple(float(v) for v in fields[1:5]))
+                    box = _box_from_fields(line.split(), remap)
+                    if box is not None:
+                        boxes.append(box)
             if not boxes and not keep_empty:
                 continue
-            new_id = f"{source}_{part}_{os.path.splitext(name)[0]}"
+            new_id = f"{source}_{stem}"
+            if new_id in index:  # the same file name in two parts: keep both
+                new_id = f"{source}_{part}_{stem}"
             save(new_id, image, boxes, source)
-            index[new_id] = {"source": source, "split": split_of(new_id)}
+            index[new_id] = {"source": source, "split": split_of(split_key(source, stem))}
             count += 1
     return count
 

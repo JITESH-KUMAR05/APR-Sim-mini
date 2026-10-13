@@ -6,7 +6,8 @@ Model `models/apr_obstacles.onnx` (YOLO11n, 640 px). Measured with the app's own
 
 - **Frontal facade photos (CMP Facade, the closest set to the app's use case):** windows recall 0.86, precision 0.92; doors recall 0.62, precision 0.48.
 - **General building photos (Open Images, many tiny far-away windows, interiors, sheds):** windows recall 0.41, precision 0.65; doors recall 0.49, precision 0.29. Not the target domain, kept as a hard test.
-- **Air conditioners on real photos (LVIS):** recall 0.28, precision 0.54, up from 0.02 before real AC data was added. On 9 real facade photos from Wikimedia Commons the model finds balcony AC units on an apartment block but still misses a close-up outdoor condenser.
+- **All real test photos together (296):** windows recall 0.60 / precision 0.77, but 1,337 of 3,336 windows still get no box at all; doors recall 0.50 / precision 0.31.
+- **Air conditioners on real photos (LVIS test photos):** recall 0.28, precision 0.54, up from 0.02 before real AC data was added. Over all 296 real test photos the AC precision is 0.38, because an AC in a photo that LVIS did not box counts as a false positive (LVIS labels are not exhaustive). On 9 real facade photos from Wikimedia Commons (looked at, not measured) the model finds balcony AC units on an apartment block but misses a close-up outdoor condenser.
 - **meter_panel, pipe, grill:** no usable real-photo test exists, so there is **no real-world number** for them. They were learned from synthetic walls and a few teacher labels. Treat them as unproven.
 - **Random synthetic walls, whole pipeline (detect, layout, plan, simulate):** 187 of 187 planted obstacles found, no planned paint over any of them (25 walls). This proves the chain works; it does not prove the model works on photographs.
 
@@ -17,7 +18,7 @@ Model `models/apr_obstacles.onnx` (YOLO11n, 640 px). Measured with the app's own
 | window, frontal facades | recall at least 0.90, precision at least 0.85 | 0.86 / 0.92 | **close; recall fails by 0.04** |
 | window, general building photos | same | 0.41 / 0.65 | **fail** |
 | door | recall at least 0.90, precision at least 0.85 | 0.62 / 0.48 (frontal), 0.49 / 0.29 (general) | **fail** |
-| ac_unit | mAP50 at least 0.70 | recall 0.28, precision 0.54 on real photos | **fail** |
+| ac_unit | mAP50 at least 0.70 | recall 0.28, precision 0.54 (0.38 over all real photos); mAP50 not computed, so recall and precision are not the target's metric | **fail on what was measured** |
 | meter_panel, pipe, grill | mAP50 at least 0.70 | not measurable on real photos | **unknown, needs the team's photos** |
 
 ## Held-out real photos by source (human labels only)
@@ -40,10 +41,12 @@ Class-agnostic: a human window or door box counts as covered if any keep-out zon
 
 | detector | window and door boxes covered | boxes over 3% of the photo covered | share of the photo marked keep-out |
 |---|---|---|---|
-| trained model v5 | 0.65 of 3,559 | 0.67 of 158 | 13% |
+| trained model (v5) | 0.65 of 3,559 | 0.67 of 158 | 13% |
 | classical fallback | 0.81 of 3,559 | 0.72 of 158 | 66% |
 
-The classical detector looks better on coverage only because it marks two thirds of every photo as keep-out, which leaves almost nothing to paint. For the boxes that matter on a wall (over 3% of the photo) the two are close. The model's advantage on real photos is precision, not coverage.
+(3,559 human boxes: 3,336 windows, 123 doors, 100 air conditioners.)
+
+The classical detector looks better on coverage only because it marks two thirds of every photo as keep-out, which leaves almost nothing to paint. For the boxes that matter on a wall (over 3% of the photo) the two are close. The model's advantage on real photos is that it marks far less of the wall as keep-out for similar coverage of the large objects; on all objects it covers fewer than the classical detector (0.65 against 0.81).
 
 ## Held-out synthetic walls
 
@@ -54,7 +57,7 @@ Recall and precision are 1.00 for all six classes (one grill missed). This only 
 1. **All 378 CMP Facade label files were empty** in version 1: the XML puts each label name on its own line, so no window or door matched. The model had been taught that frontal facades have no windows.
 2. **CMP boxes had x and y swapped:** in those files the `<x>` pair is the vertical range. Found by comparing the boxes with the pixel label images and drawing them on photos. Now covered by a regression test (`tests/test_training_fusion.py`).
 
-Fixing both took windows on frontal facades from recall 0.00 to 0.86. Lesson kept in `training/README.md`: draw labels on photos before every training run.
+Fixing both took windows on frontal facades from recall 0.01 (version 1) to 0.86. Lesson kept in `training/README.md`: draw labels on photos before every training run.
 
 Also changed: the validation set is real photos only (it was 38% synthetic, which made the best-epoch choice favour walls the model already scored 1.0 on), and the LVIS `pipe` boxes were dropped after looking at them (exhaust pipes and plumbing, not wall pipes).
 
@@ -64,6 +67,8 @@ Also changed: the validation set is real photos only (it was 38% synthetic, whic
 - Synthetic walls are 800 of 2,734 training images (29%).
 - The share of teacher boxes that a person accepted on a contact sheet was not measured.
 - The split is by photo id. Near copies of one photo under different ids, if any exist in the public sets, were not searched for.
+- Version 5 was trained before the fusion rules were tightened (a teacher box can no longer contradict or contain a human box of another class); a rebuild with the current `fuse.py` will differ slightly.
+- LVIS labels are not exhaustive, so some real air conditioners in the training photos are trained as background.
 - A test set of 296 photos, 3,336 of whose boxes are windows, says little about doors (123) and nothing about the rare classes.
 
 ## What would make it work on real walls

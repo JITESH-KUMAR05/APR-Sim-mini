@@ -45,6 +45,14 @@ def iou(a, b):
     return inter / union if union > 0 else 0.0
 
 
+def inside(a, b):
+    """Share of the smaller box that the two boxes have in common: 1.0 when one sits inside the other."""
+    x1, y1, x2, y2 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return inter / smaller if smaller > 0 else 0.0
+
+
 def nms(items, thresh=0.5):
     items = sorted(items, key=lambda t: -t[1])
     keep = []
@@ -75,8 +83,8 @@ def fuse_image(human, proposals):
             area = (x2 - x1) * (y2 - y1)
             if score < ADD_WD or area > 0.6 or area < 0.0008:
                 continue
-            if any(iou((x1, y1, x2, y2), hb) > 0.3 for hb in human_boxes):
-                continue
+            if any(iou((x1, y1, x2, y2), hb) > 0.3 or inside((x1, y1, x2, y2), hb) > 0.5 for hb in human_boxes):
+                continue  # a box that overlaps or contains a human box is the same object or a contradiction
             boxes.append((cls, x1, y1, x2, y2))
             stats["teacher_wd_added"] += 1
 
@@ -98,6 +106,8 @@ def fuse_image(human, proposals):
                 continue  # a pipe is long and thin
             if cls in (2, 3) and any(iou((x1, y1, x2, y2), wb) > 0.5 for wb in window_door):
                 continue
+            if any(b[0] != cls and not (cls == 5 and b[0] in (0, 1)) and iou((x1, y1, x2, y2), b[1:]) > 0.5 for b in human):
+                continue  # people labelled something else there: never contradict them (a grill does sit on a window)
             if score >= THRESH[cls]:
                 strong.append((cls, x1, y1, x2, y2))
             elif score >= GREY[cls]:
@@ -152,6 +162,9 @@ def main(argv=None):
     teacher = json.load(open(os.path.join(POOL, "teacher.json")))
     report = {"real": {}, "left_out": {}}
     totals = {}
+    missing = [i for i in index if i not in teacher]
+    if missing:
+        print(f"{len(missing)} pooled photos have no teacher result and are left out: run run_teacher.py")
     for image_id, rec in sorted(index.items()):
         if image_id not in teacher:
             continue

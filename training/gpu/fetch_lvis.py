@@ -5,9 +5,11 @@ COCO photos from Flickr with their own licences, see training/DATA_SOURCES.md).
     training/gpu/.venv/Scripts/python.exe training/gpu/fetch_lvis.py
 
 Output: training/data/staging/lvis/{images,labels}/<id>.{jpg,txt}. Class ids follow obstacle_detector.CLASS_NAMES:
-air_conditioner becomes ac_unit (2), pipe becomes pipe (4) but only long thin pipes (aspect ratio of at least 3),
-because most LVIS pipes are plumbing parts. Other objects in these photos are not labelled here (LVIS has no
-door or window class), so fuse.py adds window and door boxes from the teacher where it is confident.
+air_conditioner becomes ac_unit (2) and pipe becomes pipe (4), but only long thin pipes (aspect ratio of at least 3).
+pool.py then keeps only the air conditioners: looking at the pipe boxes showed exhaust pipes and plumbing, not
+wall pipes. Other objects in these photos are not labelled here (LVIS has no door or window class, and its
+labels are not exhaustive: an air conditioner nobody boxed counts as background), so fuse.py adds window and
+door boxes from the teacher where it is confident.
 """
 
 import json

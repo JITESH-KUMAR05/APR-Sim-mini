@@ -61,6 +61,14 @@ class TestRoverUi(unittest.TestCase):
     def test_the_script_tells_the_operator_when_a_review_was_saved_as_training_data(self):
         self.assertIn("if (body.correction_saved) appendLog(", read("static", "app.js"))
 
+    def test_keeping_corrections_is_a_visible_opt_out_and_the_review_token_is_sent_back(self):
+        html = app_module.app.test_client().get("/").get_data(as_text=True)
+        self.assertIn('id="keepCorrections"', html)
+        self.assertIn("never uploaded", html)
+        js = read("static", "app.js")
+        self.assertIn("review_token: currentData.review_token,", js)
+        self.assertIn("save_corrections: keepCorrectionsInput.checked,", js)
+
     def test_start_label_is_no_longer_hardcoded_to_the_origin(self):
         self.assertNotIn("START (0,0)", read("static", "app.js"))
 

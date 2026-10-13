@@ -17,6 +17,10 @@ What the trained model `models/apr_obstacles.onnx` was made from, where each par
 - `window`, `door`, and `ac_unit` on the LVIS photos: boxes made by people on real photos. Annotators skip some objects, so the model is partly punished for finding real windows nobody boxed.
 - `ac_unit` has about 790 human boxes on real photos from LVIS. `meter_panel`, `pipe`, `grill` have only a few dozen teacher boxes on real photos, and the teacher is not reliable on them. Almost all of what the model knows about these three comes from the synthetic walls, which are cartoon-like. **There is no real-world number for them.** LVIS `pipe` boxes were looked at and dropped: they are exhaust pipes and plumbing, not wall pipes. The only fix is the team's own labelled photos (see `training/README.md` and `docs/real-world-roadmap.md`).
 
+## The team's own and the operator's photos
+
+`exports/corrections` (written by the app when the operator changes the detected obstacles and leaves the "keep my corrections" box ticked) and any photos the team labels hold pictures of real people's homes, and may show faces and number plates. They stay on the computer, are never served back by the app, and are not in git (`exports/` is ignored). Review them before they are shared or trained on, and get the owner's consent for photos of private property. The labels in `exports/corrections` are the model's own detections plus the operator's changes, so look at a contact sheet of a batch before training on it.
+
 ## Splits
 
 Every real photo is assigned to train (80%), validation (10%) or test (10%) from a hash of its id before any labelling or augmentation, so no photo can be on both sides. Synthetic walls use separate seed ranges, and a separate synthetic test set is kept apart from the real test photos. The two photos in `samples/` are not real photos (the app draws them) and are used only for demonstration.
