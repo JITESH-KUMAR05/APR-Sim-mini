@@ -143,6 +143,44 @@ class TestImporters(unittest.TestCase):
             self.assertEqual(n, 3)  # clean-wall photos are kept on request
 
 
+class TestCmpImporter(unittest.TestCase):
+    @staticmethod
+    def obj(label_id, name, x1, x2, y1, y2):
+        # the real files put every value on its own line
+        return "\n".join(["<object>", "<points>", "<x>", str(x1), "</x>", "<x>", str(x2), "</x>", "<y>", str(y1), "</y>",
+                          "<y>", str(y2), "</y>", "</points>", "<label>", str(label_id), "</label>", "<labelname>", name,
+                          "</labelname>", "<flag>", "1", "</flag>", "</object>", ""])
+
+    @property
+    def XML(self):
+        return self.obj(2, "facade", 0.0, 1, 0.0, 1) + self.obj(3, "window", 0.1, 0.3, 0.2, 0.5) + self.obj(4, "door", 0.6, 0.8, 0.4, 1.0)
+
+    def test_window_and_door_boxes_are_read_from_the_real_multi_line_xml(self):
+        # This once produced empty label files for all 378 photos: the label text sits on its own line.
+        import cv2
+        import numpy as np
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "base")
+            os.makedirs(folder)
+            cv2.imwrite(os.path.join(folder, "cmp_b0001.jpg"), np.zeros((40, 60, 3), np.uint8))
+            open(os.path.join(folder, "cmp_b0001.xml"), "w").write(self.XML)
+            pool.POOL = os.path.join(tmp, "pool")
+            os.makedirs(os.path.join(pool.POOL, "images"))
+            os.makedirs(os.path.join(pool.POOL, "labels_human"))
+            index = {}
+            self.assertEqual(pool.from_cmp(index, folder), 1)
+            lines = open(os.path.join(pool.POOL, "labels_human", "cmp_cmp_b0001.txt")).read().splitlines()
+            self.assertEqual([line.split()[0] for line in lines], ["0", "1"])  # the facade box is not an obstacle
+            cls, cx, cy, w, h = lines[0].split()
+            # the <x> pair (0.1 to 0.3) is the vertical range and the <y> pair (0.2 to 0.5) the horizontal range
+            self.assertAlmostEqual(float(cx), 0.35, places=4)
+            self.assertAlmostEqual(float(cy), 0.2, places=4)
+            self.assertAlmostEqual(float(w), 0.3, places=4)
+            self.assertAlmostEqual(float(h), 0.2, places=4)
+
+
 class TestHelpers(unittest.TestCase):
     def test_iou(self):
         self.assertAlmostEqual(fuse.iou((0, 0, 1, 1), (0, 0, 1, 1)), 1.0)

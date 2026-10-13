@@ -6,7 +6,7 @@ Status: draft for the team, 2026-10-13. Written for the project lead and the fou
 
 | Part | State | Evidence |
 |---|---|---|
-| Wall photo to obstacle map to coverage path | **Works in software.** Window and door detection on real photos is only partly reliable. | `training/EVAL_REPORT.md` |
+| Wall photo to obstacle map to coverage path | **Works in software.** Windows on frontal facade photos: recall 0.86, precision 0.92. Doors, air conditioners and the other classes are weak or unmeasured on real photos. | `training/EVAL_REPORT.md` |
 | Start corner and stripe direction chosen from the obstacles | Works, rule-based, explains itself | `layout_advisor.py`, tests |
 | Mission file, host tool, rover protocol, simulator | Works **in simulation only** (wheel slip, gyro drift, faults, e-stop) | 300+ tests, `docs/rover-protocol.md` |
 | Arduino firmware | Written and tested as portable C++. **Never built for an Arduino. No hardware exists.** | `rover/firmware/core/` |
@@ -34,7 +34,7 @@ I searched the public sources. What I found and used, and what exists but needs 
 | Source | What it gives | Status |
 |---|---|---|
 | Open Images, CMP Facade, ADE20K | human window and door boxes | **used** |
-| LVIS (COCO photos) | human boxes for `air_conditioner` (about 1,000 boxes) and `pipe` (about 2,400, filtered to long thin ones) | **used in version 2**, mostly indoor photos |
+| LVIS (COCO photos) | human boxes for `air_conditioner` (about 790 in training). Its `pipe` boxes were looked at and dropped: exhaust pipes and plumbing | **used** for air conditioners |
 | [BFA-3D](https://arxiv.org/html/2409.04025) | 1,240 facade photos, 1200 x 1200, human-checked boxes for door, windows, balcony, **air conditioner unit**, billboard, glass curtain wall | **not used**: it is on a Baidu Pan share ([repository](https://github.com/CVEO/BFA-YOLO)), which needs a Baidu account and cannot be fetched by a script. A team member can download it by hand. Licence not stated. |
 | Roboflow Universe ([air conditioning, 164 images](https://universe.roboflow.com/yolo-uv06o/air-conditioning-dataset), several door/window/AC sets of 250 to 1,600 images, [electric meter](https://universe.roboflow.com/object-detection-v0up3/electric-meter-detector) and [meter box](https://universe.roboflow.com/pemula-uf3rv/yolo_fix) sets, mostly CC BY 4.0) | small community sets, quality unchecked | **not used**: downloads need a free Roboflow account (an API key or a manual export). The importer is ready (3.3). |
 | Objects365 (has an Air Conditioner class) and the full ADE20K (3,000+ classes) | large, real | not used: 700 GB, and a registration form |
@@ -61,8 +61,8 @@ The importer takes any YOLO export (the team's labelled photos, a Roboflow downl
 training/gpu/.venv/Scripts/python.exe training/gpu/pool.py yolo team DIR "window=window,aircon=ac_unit,meter=meter_panel,grill=grill,pipe=pipe" --keep-empty
 training/gpu/.venv/Scripts/python.exe training/gpu/run_teacher.py
 training/gpu/.venv/Scripts/python.exe training/gpu/fuse.py --synth 600
-training/gpu/.venv/Scripts/python.exe training/gpu/train_gpu.py --weights training/runs/apr_v2/weights/best.pt --epochs 40 --name apr_v3
-.venv/Scripts/python.exe training/eval_report.py --model training/runs/apr_v3/weights/best.onnx
+training/gpu/.venv/Scripts/python.exe training/gpu/train_gpu.py --weights training/runs/apr_v5/weights/best.pt --epochs 40 --name apr_v6
+.venv/Scripts/python.exe training/eval_report.py --model training/runs/apr_v6/weights/best.onnx
 ```
 
 Real, human-labelled photos always win over teacher boxes for the classes they label. The synthetic walls should shrink to a small share once real data exists.

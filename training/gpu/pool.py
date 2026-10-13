@@ -73,8 +73,8 @@ def from_open_images(index):
     return count
 
 
-def from_cmp(index):
-    folder = os.path.join(DATA, "staging", "cmp", "base")
+def from_cmp(index, folder=None):
+    folder = folder or os.path.join(DATA, "staging", "cmp", "base")
     count = 0
     if not os.path.isdir(folder):
         return 0
@@ -88,13 +88,15 @@ def from_cmp(index):
         root = ET.fromstring("<r>" + open(os.path.join(folder, stem + ".xml"), encoding="utf-8").read() + "</r>")
         boxes = []
         for obj in root.findall("object"):
-            label = obj.findtext("labelname")
+            label = (obj.findtext("labelname") or "").strip()  # the XML puts the text on its own line
             cls = {"window": 0, "door": 1}.get(label)
             if cls is None:
                 continue
-            xs = [float(v.text) for v in obj.find("points").findall("x")]
-            ys = [float(v.text) for v in obj.find("points").findall("y")]
-            x1, x2, y1, y2 = min(xs), max(xs), min(ys), max(ys)
+            # In these files the <x> pair is the VERTICAL range and the <y> pair the HORIZONTAL one (checked against the
+            # pixel label images and by drawing the boxes on the photos). Read the other way, every box is misplaced.
+            rows = [float(v.text) for v in obj.find("points").findall("x")]
+            columns = [float(v.text) for v in obj.find("points").findall("y")]
+            x1, x2, y1, y2 = min(columns), max(columns), min(rows), max(rows)
             if x2 - x1 < 0.005 or y2 - y1 < 0.005:
                 continue
             boxes.append((cls, (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1))

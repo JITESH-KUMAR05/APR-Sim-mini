@@ -6,6 +6,8 @@ The app runs a YOLO11n model exported to ONNX (`models/apr_obstacles.onnx`). Tra
 
 `training/gpu/` is its own uv project, so the app's dependencies are untouched. It builds the model from key-free public photos, labels for the rare classes from an open-vocabulary teacher model, and synthetic walls from `wall_synth.py`. Sources, licences and the exact commands are in [DATA_SOURCES.md](DATA_SOURCES.md). The measured results are in [EVAL_REPORT.md](EVAL_REPORT.md), written by `training/eval_report.py`.
 
+**Draw the labels on the photos before every training run.** Two bugs (all CMP labels empty, then x and y swapped) went unnoticed through two trainings and cost the model its main target domain; `training/EVAL_REPORT.md` tells the story. Make a contact sheet of 12 labelled training photos and look at it.
+
 The model made this way is a **first version**. Window and door come from human labels on real photos. `ac_unit`, `meter_panel`, `pipe` and `grill` come almost only from synthetic walls, so expect them to be weak on real walls. The way to improve them is sections 1 and 5 below with the team's own photos, starting from the weights of this version (`--weights`).
 
 Classes, in model order: `window`, `door`, `ac_unit`, `meter_panel`, `pipe`, `grill` (defined once in `obstacle_detector.py`).
