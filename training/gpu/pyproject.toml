@@ -15,6 +15,7 @@ dependencies = [
     "requests",
     "tqdm",
     "transformers",
+    "ijson>=3.6.0",
 ]
 
 [tool.uv]

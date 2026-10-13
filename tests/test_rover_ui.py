@@ -58,6 +58,9 @@ class TestRoverUi(unittest.TestCase):
         self.assertIn("if (generation !== simGeneration)", js)
         self.assertIn("return runAnalysis();", js)  # Random Wall stays disabled until the analysis is done
 
+    def test_the_script_tells_the_operator_when_a_review_was_saved_as_training_data(self):
+        self.assertIn("if (body.correction_saved) appendLog(", read("static", "app.js"))
+
     def test_start_label_is_no_longer_hardcoded_to_the_origin(self):
         self.assertNotIn("START (0,0)", read("static", "app.js"))
 

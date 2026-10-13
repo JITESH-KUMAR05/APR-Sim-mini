@@ -20,6 +20,7 @@ from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from geometry_engine import DEFAULT_DIRECTION, DEFAULT_START_CORNER, GeometryEngine
+import corrections
 from layout_advisor import choose_layout
 from wall_synth import CLASS_NAMES, random_scene
 from cad_exporter import CADExporter
@@ -35,6 +36,7 @@ if os.environ.get("VERCEL") or not os.access(BASE_DIR, os.W_OK):
     EXPORTS_DIR = os.path.join("/tmp", "exports")
 else:
     EXPORTS_DIR = os.path.join(BASE_DIR, "exports")
+CORRECTIONS_DIR = os.path.join(EXPORTS_DIR, "corrections")  # operator corrections, saved as labelled photos
 SAMPLES_DIR = os.path.join(BASE_DIR, "samples")
 os.makedirs(EXPORTS_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
@@ -288,6 +290,10 @@ def analyze_wall():
             wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles, start_corner, direction
         )
         current_session["confidence"] = confidence
+        current_session["review"] = {  # what the detector said, so a later change by the operator can be saved
+            "image": img_bgr, "width_mm": wall_w_mm, "height_mm": wall_h_mm,
+            "detected": [dict(o) for o in obstacles],
+        }
 
         # Encode image to base64 for 2D canvas overlay
         # Resize to max 1200px wide for snappy UI responsiveness
@@ -336,6 +342,20 @@ def analyze_wall():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+def save_correction_if_changed(wall_w_mm, wall_h_mm, obstacles):
+    """Keep the operator's review of the last analysed photo as a labelled training sample. Never fails the request."""
+    review = current_session.get("review")
+    if not review or (review["width_mm"], review["height_mm"]) != (wall_w_mm, wall_h_mm):
+        return False
+    if corrections.same_obstacles(review["detected"], obstacles):
+        return False
+    try:
+        return corrections.save_correction(CORRECTIONS_DIR, review["image"], obstacles, wall_w_mm, wall_h_mm) is not None
+    except OSError as exc:
+        log.warning("could not save the correction: %s", exc)
+        return False
+
+
 @app.route("/api/replan", methods=["POST"])
 def replan():
     """Re-plan the mission after the operator confirms or dismisses uncertain obstacles."""
@@ -361,6 +381,7 @@ def replan():
         )
         return jsonify({
             "success": True,
+            "correction_saved": save_correction_if_changed(wall_w_mm, wall_h_mm, obstacles),
             "layout": layout,
             "obstacles": obstacles,
             "waypoints": waypoints,

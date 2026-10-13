@@ -82,7 +82,10 @@ def fuse_image(human, proposals):
 
     usable = True
     window_door = [b[1:] for b in boxes if b[0] in (0, 1)]
+    human_classes = {b[0] for b in human}
     for cls in (2, 3, 4, 5):
+        if cls in human_classes:
+            continue  # people labelled this class in this photo: the teacher adds nothing and cannot veto the photo
         cands = nms(by_class[cls])
         strong = []
         for _, score, x1, y1, x2, y2 in cands:
@@ -139,7 +142,7 @@ def _write_synth(job):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--synth", type=int, default=1200, help="synthetic training walls")
-    parser.add_argument("--synth-val", type=int, default=150)
+    parser.add_argument("--synth-val", type=int, default=0, help="synthetic walls in the validation set; 0 so the best epoch is chosen on real photos only")
     parser.add_argument("--synth-test", type=int, default=250)
     args = parser.parse_args(argv)
 

@@ -800,6 +800,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clearSimResult();
             refreshViews(currentData);
             showLayout(body.layout);
+            if (body.correction_saved) appendLog('Your review was saved as a labelled photo for the next training round', 'info');
             render2DCanvas();
             appendLog(`Mission re-planned: ${body.obstacles.length} keep-out zones, ${body.waypoints.length} waypoints`, 'success');
             replanInFlight = false;

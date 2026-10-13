@@ -81,6 +81,68 @@ class TestRareClasses(unittest.TestCase):
         self.assertEqual(stats["dropped_misfire"], 9)
 
 
+class TestHumanLabelledRareClasses(unittest.TestCase):
+    def test_a_class_people_labelled_in_the_photo_is_not_touched_by_the_teacher(self):
+        human = [(AC, 0.1, 0.1, 0.3, 0.3)]
+        boxes, usable, stats = fuse.fuse_image(human, [proposal(AC, 0.9, (0.6, 0.6, 0.72, 0.72)), proposal(AC, 0.26, (0.4, 0.4, 0.5, 0.5))])
+        self.assertEqual(boxes, human)
+        self.assertTrue(usable)  # the unsure teacher box cannot veto a photo whose AC boxes are human-made
+        self.assertEqual(stats["teacher_rare_added"], 0)
+
+    def test_other_rare_classes_in_the_same_photo_still_follow_the_teacher_rules(self):
+        human = [(AC, 0.1, 0.1, 0.3, 0.3)]
+        boxes, _, _ = fuse.fuse_image(human, [proposal(GR, 0.6, (0.6, 0.1, 0.75, 0.3))])
+        self.assertEqual(sorted(b[0] for b in boxes), [AC, GR])
+
+
+class TestImporters(unittest.TestCase):
+    def test_a_mapping_turns_dataset_names_into_app_classes(self):
+        self.assertEqual(pool.parse_mapping("Window=window, air_conditioning=ac_unit"), {"window": 0, "air_conditioning": 2})
+        with self.assertRaises(ValueError):
+            pool.parse_mapping("ac=aircon")
+
+    def test_class_names_are_read_from_all_three_yaml_layouts(self):
+        import tempfile
+
+        layouts = {
+            "flow": "train: x\nnames: ['air conditioner', \"grill\"]\nnc: 2\n",
+            "block": "names:\n  - air conditioner\n  - grill\nnc: 2\n",
+            "numbered": "path: x\nnames:\n  0: air conditioner\n  1: grill\n",
+        }
+        for name, text in layouts.items():
+            with self.subTest(layout=name), tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "data.yaml")
+                open(path, "w").write(text)
+                self.assertEqual(pool.read_names(path), ["air conditioner", "grill"])
+
+    def test_a_yolo_export_is_pooled_remapped_and_split_by_hash(self):
+        import cv2
+        import numpy as np
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            export = os.path.join(tmp, "export")
+            for part in ("train", "test"):
+                os.makedirs(os.path.join(export, part, "images"))
+                os.makedirs(os.path.join(export, part, "labels"))
+            open(os.path.join(export, "data.yaml"), "w").write("names: ['aircon', 'cat', 'bars']\n")
+            for part, name, label in (("train", "a", "0 0.5 0.5 0.2 0.2\n1 0.1 0.1 0.1 0.1\n"), ("test", "b", "2 0.5 0.5 0.4 0.4\n"),
+                                      ("train", "c", "1 0.5 0.5 0.2 0.2\n")):
+                cv2.imwrite(os.path.join(export, part, "images", name + ".jpg"), np.zeros((40, 60, 3), np.uint8))
+                open(os.path.join(export, part, "labels", name + ".txt"), "w").write(label)
+            pool.POOL = os.path.join(tmp, "pool")
+            os.makedirs(os.path.join(pool.POOL, "images"))
+            os.makedirs(os.path.join(pool.POOL, "labels_human"))
+            index = {}
+            n = pool.from_yolo_export(index, "team", export, {"aircon": 2, "bars": 5})
+            self.assertEqual(n, 2)  # photo c has no mapped class and is skipped
+            self.assertEqual(set(index), {"team_train_a", "team_test_b"})
+            self.assertEqual(open(os.path.join(pool.POOL, "labels_human", "team_train_a.txt")).read().split(), ["2", "0.500000", "0.500000", "0.200000", "0.200000"])
+            self.assertEqual(open(os.path.join(pool.POOL, "labels_human", "team_test_b.txt")).read().split()[0], "5")
+            n = pool.from_yolo_export(index, "team", export, {"aircon": 2}, keep_empty=True)
+            self.assertEqual(n, 3)  # clean-wall photos are kept on request
+
+
 class TestHelpers(unittest.TestCase):
     def test_iou(self):
         self.assertAlmostEqual(fuse.iou((0, 0, 1, 1), (0, 0, 1, 1)), 1.0)
