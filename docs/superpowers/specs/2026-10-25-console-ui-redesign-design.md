@@ -86,7 +86,7 @@ Everything the console does today keeps working, through the same API calls:
 - Element IDs used by `app.js`, `viewer3d.js`, `rover_sim.js` and `corner_picker.js` are kept where the element still exists; where an element moves, the script changes with it. The stale-reply guards (simulator generation counter, Random Wall disabled until its analysis finishes) stay.
 - Planning is explicit: changing a parameter does not re-plan by itself, except start corner and stripe direction after a plan exists (as today). "Plan wall" is the single primary action.
 - Errors from the server appear inline next to the control that caused them and in the activity log, as text (never as HTML).
-- The status bar's facts come from the analyse response (`detector`), a new tiny call or flag that says whether the simulator can run (the simulate endpoint already answers 503 when it cannot; the page learns it from the first call or from a small `/api/capabilities` endpoint), and the last action.
+- The status bar's facts come from a new `GET /api/capabilities` that answers `{"detector": "yolo11n-onnx" | "classical-fallback", "simulator": true | false}` (the simulator counts as available when the app is not a deployment, the rover sources are present and `g++` is on the path; the first replay may still find it blocked, and then the status bar updates from the 503 answer), from the analyse response, and from the last action.
 - Keyboard: tabs reachable and switchable with arrow keys, every control focusable with a visible focus ring, Escape closes drawers and dialogs.
 
 ## 4. Testing
