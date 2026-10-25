@@ -2,6 +2,8 @@
  * Sweep preview: animates the planned path over the wall in the browser, so the operator can see
  * the order of the passes. It is not a physics model; the C++ rover simulator (Physics replay) is.
  * Painted area and paint volume are the plan's own figures, shared out over the spray distance done.
+ * The rover moves at the plan's nominal speed times the chosen multiple (1x is real time). Its drawing
+ * is illustrative: the nozzle bar is the real spray width, the body is sized from it.
  */
 
 class RoverSimulation {
@@ -19,13 +21,13 @@ class RoverSimulation {
         this.isRunning = false;
         this.isPaused = false;
         this.animId = null;
-        this.speedMultiplier = 1;
+        this.speedMultiplier = 5;
         this.lastFrameTime = performance.now();
         this.loop = this.loop.bind(this);
 
         this.viewW = 0;
         this.viewH = 0;
-        this.state = { index: 0, along: 0, x: 0, y: 0, spraying: false, sprayDone_mm: 0, seconds: 0, finished: false };
+        this.state = { index: 0, along: 0, x: 0, y: 0, heading: 0, spraying: false, sprayDone_mm: 0, seconds: 0, finished: false };
         this.sprayTotal_mm = 0;
         this.speed_mm_s = 250;
     }
@@ -52,6 +54,16 @@ class RoverSimulation {
         return a.spray_active && b.spray_active && a.row === b.row;
     }
 
+    // Canvas angle of travel along the first segment from i on that has any length (canvas y points down)
+    headingAt(i) {
+        for (let k = Math.max(1, i); k < this.waypoints.length; k++) {
+            const a = this.waypoints[k - 1];
+            const b = this.waypoints[k];
+            if (Math.hypot(b.x - a.x, b.y - a.y) > 0.5) return Math.atan2(-(b.y - a.y), b.x - a.x);
+        }
+        return this.state ? this.state.heading : 0;
+    }
+
     segmentLength(i) {
         const a = this.waypoints[i - 1];
         const b = this.waypoints[i];
@@ -72,7 +84,7 @@ class RoverSimulation {
     reset() {
         this.stop();
         const first = this.waypoints[0] || { x: 0, y: 0 };
-        this.state = { index: 1, along: 0, x: first.x, y: first.y, spraying: false, sprayDone_mm: 0, seconds: 0, finished: false };
+        this.state = { index: 1, along: 0, x: first.x, y: first.y, heading: this.headingAt(1), spraying: false, sprayDone_mm: 0, seconds: 0, finished: false };
         this.updateReadouts();
         this.render();
     }
@@ -117,8 +129,7 @@ class RoverSimulation {
 
     loop(timestamp) {
         if (!this.isRunning || this.isPaused) return;
-        // The preview runs at 20x real time so a wall finishes in a minute or two; the speed buttons multiply that
-        const dt = Math.min(0.08, (timestamp - this.lastFrameTime) / 1000) * this.speedMultiplier * 20;
+        const dt = Math.min(0.08, (timestamp - this.lastFrameTime) / 1000) * this.speedMultiplier;
         this.lastFrameTime = timestamp;
         this.update(dt);
         this.render();
@@ -146,6 +157,13 @@ class RoverSimulation {
                 s.index += 1;
                 s.along = 0;
             }
+        }
+        if (s.index < this.waypoints.length) {
+            const target = this.headingAt(s.index);
+            let turn = target - s.heading;
+            while (turn > Math.PI) turn -= Math.PI * 2;
+            while (turn < -Math.PI) turn += Math.PI * 2;
+            s.heading += turn * Math.min(1, dt * 6);
         }
         if (s.index >= this.waypoints.length) {
             s.finished = true;
@@ -235,16 +253,79 @@ class RoverSimulation {
         ctx.lineWidth = 1;
         ctx.strokeRect(g.x0 + 0.5, g.y0 + 0.5, W - 1, H - 1);
 
-        // The rover: a ring, filled while it sprays
-        const rx = g.X(s.x);
-        const ry = g.Y(s.y);
+        this.drawRover(ctx, g, c);
+    }
+
+    // Top-down rover: tracks, chassis, suction skirt, and the nozzle bar at the back, as wide as the spray
+    drawRover(ctx, g, c) {
+        const s = this.state;
+        const spray = this.wall.spray_width_mm || 250;
+        const bodyL = spray * 1.1;
+        const bodyW = spray * 1.25;
+        const k = Math.max(g.scale, 46 / bodyL); // at least big enough to read on a large wall
+        const L = bodyL * k;
+        const W = bodyW * k;
+        const bar = spray * k;
+        const box = (x, y, w, h, r) => {
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+        };
+
+        ctx.save();
+        ctx.translate(g.X(s.x), g.Y(s.y));
+        ctx.rotate(s.heading);
+        ctx.lineJoin = 'round';
+
+        if (s.spraying) {
+            ctx.fillStyle = c('accent');
+            ctx.globalAlpha = 0.28;
+            ctx.beginPath();
+            ctx.moveTo(-L * 0.36, 0);
+            ctx.lineTo(-L * 0.5 - 7, -bar / 2);
+            ctx.lineTo(-L * 0.5 - 7, bar / 2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+        ctx.strokeStyle = s.spraying ? c('accent') : c('muted');
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
         ctx.beginPath();
-        ctx.arc(rx, ry, 6, 0, Math.PI * 2);
-        ctx.fillStyle = s.spraying ? c('accent') : c('canvas');
+        ctx.moveTo(-L * 0.5 - 7, -bar / 2);
+        ctx.lineTo(-L * 0.5 - 7, bar / 2);
+        ctx.stroke();
+
+        const track = W * 0.16;
+        ctx.fillStyle = c('strong');
+        [-1, 1].forEach((side) => {
+            box(-L * 0.46, side * (W / 2) - (side > 0 ? track : 0), L * 0.92, track, Math.min(3, track / 2));
+            ctx.fill();
+        });
+
+        const inner = W - track * 2 + 2;
+        box(-L / 2, -inner / 2, L, inner, Math.min(6, L * 0.14));
+        ctx.fillStyle = c('panel');
         ctx.fill();
         ctx.strokeStyle = c('text');
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 1.25;
         ctx.stroke();
+
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = c('muted');
+        ctx.lineWidth = 1;
+        box(-L * 0.3, -inner * 0.3, L * 0.6, inner * 0.6, 3);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = s.spraying ? c('accent') : c('text');
+        ctx.beginPath();
+        ctx.moveTo(L * 0.42, 0);
+        ctx.lineTo(L * 0.2, -inner * 0.16);
+        ctx.lineTo(L * 0.2, inner * 0.16);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
     }
 
     updateReadouts() {
@@ -263,8 +344,8 @@ class RoverSimulation {
         else if (this.isRunning) status = s.spraying ? 'Painting' : 'Moving, spray off';
 
         set('simRoverStatus', status);
-        set('simPosX', `x ${Math.round(s.x)} mm`);
-        set('simPosY', `y ${Math.round(s.y)} mm`);
+        set('simPosX', String(Math.round(s.x)));
+        set('simPosY', String(Math.round(s.y)));
         set('simWpProgress', `${reached} / ${total}`);
         set('simProgressPct', `${Math.round(share * 100)}%`);
         set('simAreaCovered', `${((metrics.net_paintable_area_m2 || 0) * share).toFixed(2)} m²`);

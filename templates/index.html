@@ -130,6 +130,7 @@
 					<button type="button" class="tool on" id="layerStripes" aria-pressed="true">Stripes</button>
 					<button type="button" class="tool on" id="layerTransit" aria-pressed="true">Moves</button>
 					<button type="button" class="tool on" id="layerKeepouts" aria-pressed="true">Keep-outs</button>
+					<button type="button" class="tool on" id="layerReplay" aria-pressed="true" hidden>Replay</button>
 					<span class="tool-sep" aria-hidden="true"></span>
 					<button type="button" class="tool" id="layoutWhy" aria-expanded="false" aria-controls="layoutAdvice">Why this layout?</button>
 				</div>
@@ -142,26 +143,29 @@
 					<span class="key key-move"></span>Move, spray off
 					<span class="key key-keep"></span>Keep-out
 					<span class="key key-review"></span>Needs review
-					<span class="key key-true"></span>Simulated true path
+					<span class="key key-true" data-replay hidden></span><span data-replay hidden>Replay: true path</span>
 				</p>
 			</section>
 
 			<section class="view" role="tabpanel" id="panel3d" aria-labelledby="tab3d" hidden>
 				<div class="toolbar" role="toolbar" aria-label="3D view">
+					<button type="button" class="tool" id="isoViewBtn">Angle</button>
 					<button type="button" class="tool" id="resetViewBtn">Front</button>
-					<button type="button" class="tool" id="isoViewBtn">Iso</button>
 					<button type="button" class="tool" id="topDownViewBtn">Top</button>
 					<span class="tool-sep" aria-hidden="true"></span>
+					<button type="button" class="tool on" id="togglePhotoBtn" aria-pressed="true">Photo</button>
 					<button type="button" class="tool on" id="togglePathBtn" aria-pressed="true">Path</button>
 					<button type="button" class="tool on" id="toggleObstaclesBtn" aria-pressed="true">Keep-outs</button>
+					<button type="button" class="tool on" id="toggleLabelsBtn" aria-pressed="true">Labels</button>
 					<button type="button" class="tool" id="wireframeBtn" aria-pressed="false">Wireframe</button>
 				</div>
 				<div class="canvas-wrap" id="viewport3d"></div>
+				<p class="legend" aria-hidden="true">Drag to turn · right-drag to pan · scroll to zoom</p>
 			</section>
 
 			<section class="view sim-view" role="tabpanel" id="panelSimulate" aria-labelledby="tabSimulate" hidden>
 				<div class="sim-columns">
-					<section class="sim-block" aria-labelledby="hPreview">
+					<section class="sim-block sim-preview" aria-labelledby="hPreview">
 						<header class="block-head">
 							<div>
 								<h2 id="hPreview">Preview sweep</h2>
@@ -172,21 +176,24 @@
 								<button type="button" class="btn btn-quiet" id="simPauseBtn">Pause</button>
 								<button type="button" class="btn btn-quiet" id="simResetBtn">Reset</button>
 								<div class="segmented" role="group" aria-label="Speed">
-									<button type="button" class="sim-speed-btn active" data-speed="1">1×</button>
-									<button type="button" class="sim-speed-btn" data-speed="2">2×</button>
-									<button type="button" class="sim-speed-btn" data-speed="5">5×</button>
+									<button type="button" class="sim-speed-btn" data-speed="1" title="Real rover speed">1×</button>
+									<button type="button" class="sim-speed-btn active" data-speed="5">5×</button>
+									<button type="button" class="sim-speed-btn" data-speed="10">10×</button>
+									<button type="button" class="sim-speed-btn" data-speed="25">25×</button>
 								</div>
 							</div>
 						</header>
 						<div class="canvas-wrap sim-canvas" id="simCanvasWrap"><canvas id="simCanvas" role="img" aria-label="Animated preview of the painting path"></canvas></div>
-						<dl class="readouts compact">
-							<div><dt>State</dt><dd id="simRoverStatus">Ready</dd></div>
-							<div><dt>Position</dt><dd class="mono"><span id="simPosX">0 mm</span>, <span id="simPosY">0 mm</span></dd></div>
-							<div><dt>Progress</dt><dd class="mono"><span id="simProgressPct">0%</span> · <span id="simWpProgress">0 / 0</span></dd></div>
-							<div><dt>Painted</dt><dd class="mono"><span id="simAreaCovered">0.00 m²</span> · <span id="simPaintVolume">0.00 L</span></dd></div>
-							<div><dt>Rover time</dt><dd class="mono" id="simElapsedTime">00:00</dd></div>
-						</dl>
 						<div class="progress" aria-hidden="true"><div id="simProgressBar"></div></div>
+						<dl class="stat-strip">
+							<div><dt>State</dt><dd id="simRoverStatus">Ready</dd></div>
+							<div><dt>Painted</dt><dd class="mono" id="simProgressPct">0%</dd></div>
+							<div><dt>Area</dt><dd class="mono" id="simAreaCovered">0.00 m²</dd></div>
+							<div><dt>Paint</dt><dd class="mono" id="simPaintVolume">0.00 L</dd></div>
+							<div><dt>Rover time</dt><dd class="mono" id="simElapsedTime">00:00</dd></div>
+							<div><dt>Waypoint</dt><dd class="mono" id="simWpProgress">0 / 0</dd></div>
+							<div><dt>Position, mm</dt><dd class="mono"><span id="simPosX">0</span>, <span id="simPosY">0</span></dd></div>
+						</dl>
 					</section>
 
 					<section class="sim-block" aria-labelledby="hPhysics">
@@ -246,10 +253,12 @@
 					<div><dt>Total path</dt><dd class="mono" id="distanceValue">–</dd></div>
 					<div><dt>Time at speed</dt><dd class="mono" id="cycleTimeValue">–</dd></div>
 					<div><dt>Paintable area</dt><dd class="mono" id="areaValue">–</dd></div>
-					<div><dt>Stripes</dt><dd class="mono" id="layoutValue">–</dd></div>
+					<div><dt>Passes</dt><dd class="mono" id="layoutValue">–</dd></div>
 					<div><dt>Waypoints</dt><dd class="mono" id="cellsValue">–</dd></div>
 				</dl>
 			</section>
+
+			<p class="note" id="unreachedNote" hidden></p>
 
 			<p class="note" id="detectorBanner" hidden>Trained model not loaded. Basic edge detection is less reliable on real walls, so check the keep-outs.</p>
 

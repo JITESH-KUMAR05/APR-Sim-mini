@@ -99,7 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let planView = null; // zoom and pan of the wall plan; null means fit to the panel
     let planGeom = null; // where the wall was last drawn, for zoom, pan and hover
     let highlightId = null;
-    const layers = { photo: true, stripes: true, transit: true, keepouts: true };
+    const layers = { photo: true, stripes: true, transit: true, keepouts: true, replay: true };
 
     const CLASS_OPTIONS = [
         ['window', 'Window'],
@@ -251,7 +251,8 @@ document.addEventListener('DOMContentLoaded', () => {
     $('resetViewBtn').addEventListener('click', () => viewer3D && viewer3D.resetView());
     $('isoViewBtn').addEventListener('click', () => viewer3D && viewer3D.setIsometricView());
     $('topDownViewBtn').addEventListener('click', () => viewer3D && viewer3D.setTopDownView());
-    [['wireframeBtn', 'toggleWireframe'], ['togglePathBtn', 'togglePath'], ['toggleObstaclesBtn', 'toggleObstacles']].forEach(([id, method]) => {
+    [['wireframeBtn', 'toggleWireframe'], ['togglePathBtn', 'togglePath'], ['toggleObstaclesBtn', 'toggleObstacles'],
+        ['togglePhotoBtn', 'togglePhoto'], ['toggleLabelsBtn', 'toggleLabels']].forEach(([id, method]) => {
         const btn = $(id);
         btn.addEventListener('click', () => {
             if (!viewer3D) return;
@@ -521,11 +522,13 @@ document.addEventListener('DOMContentLoaded', () => {
             showLayout(data.layout);
 
             loadedImage2D = null;
+            if (viewer3D) viewer3D.setPhoto(null);
             if (data.image_data_url) {
                 const image = new Image();
                 image.onload = () => {
                     if (currentData !== data) return;
                     loadedImage2D = image;
+                    if (viewer3D) viewer3D.setPhoto(image);
                     render2DCanvas();
                     if (roverSim) {
                         roverSim.sourceImage = image;
@@ -635,7 +638,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateMetrics(data) {
         const { wall, stats, metrics } = data;
-        layoutValue.textContent = String(stats.num_rows);
+        const passes = stats.num_passes || stats.num_rows;
+        layoutValue.textContent = stats.num_regions > 1 ? `${passes} in ${stats.num_regions} regions` : String(passes);
         cellsValue.textContent = stats.waypoint_count.toLocaleString();
         areaValue.textContent = `${metrics.net_paintable_area_m2} m²`;
         distanceValue.textContent = `${stats.total_distance_m} m`;
@@ -645,7 +649,11 @@ document.addEventListener('DOMContentLoaded', () => {
         $('statusWallBoundary').textContent = `${wall.width_mm} × ${wall.height_mm} mm`;
         $('statusSprayDist').textContent = `${stats.spray_distance_m} m`;
         statusWall.textContent = `${wall.width_mm} × ${wall.height_mm} mm`;
-        statusLayout.textContent = data.layout ? `${layoutText(data.layout)} · ${stats.num_rows} stripes` : '';
+        statusLayout.textContent = data.layout ? `${layoutText(data.layout)} · ${passes} passes` : '';
+        const unreached = $('unreachedNote');
+        unreached.hidden = !(stats.unreached_area_m2 > 0);
+        unreached.textContent = `${stats.unreached_area_m2} m² is cut off by a keep-out that runs from edge to edge, ` +
+            'so the rover cannot reach it and it is left unpainted. Plan that part as its own wall.';
     }
 
     function obstacleName(obs) {
@@ -770,7 +778,7 @@ document.addEventListener('DOMContentLoaded', () => {
         reason.textContent = layout.reason;
         const table = document.createElement('table');
         const head = table.createTHead().insertRow();
-        ['#', 'Layout', 'Crossings', 'Moves, m', 'Turns'].forEach((text) => {
+        ['#', 'Layout', 'Regions', 'Moves, m', 'Turns'].forEach((text) => {
             const th = document.createElement('th');
             th.textContent = text;
             head.appendChild(th);
@@ -779,7 +787,7 @@ document.addEventListener('DOMContentLoaded', () => {
         layout.options.forEach((option) => {
             const row = tbody.insertRow();
             if (option.start_corner === layout.start_corner && option.direction === layout.direction) row.className = 'chosen';
-            [option.rank, layoutText(option), option.crossings, option.transit_m.toFixed(1), option.turns].forEach((value) => {
+            [option.rank, layoutText(option), option.unreached_m2 > 0 ? `${option.regions}, ${option.unreached_m2} m² cut off` : option.regions, option.transit_m.toFixed(1), option.turns].forEach((value) => {
                 row.insertCell().textContent = String(value);
             });
         });
@@ -842,9 +850,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ----- Physics replay -----
 
+    function showReplayLayer(shown) {
+        $('layerReplay').hidden = !shown;
+        document.querySelectorAll('[data-replay]').forEach((el) => { el.hidden = !shown; });
+    }
+
     function clearSimResult() {
         simGeneration += 1;
         simResult = null;
+        showReplayLayer(false);
         simReport.hidden = true;
         simReport.replaceChildren();
     }
@@ -874,6 +888,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             simResult = body;
+            showReplayLayer(true);
             showSimReport(body);
             render2DCanvas();
             appendLog(body.ok ? 'Replay finished; the true path is drawn on the plan' : `Replay stopped: ${plain(body.error)}`, body.ok ? 'success' : 'warn');
@@ -927,7 +942,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ----- Plan layers, zoom and pan -----
 
-    [['layerPhoto', 'photo'], ['layerStripes', 'stripes'], ['layerTransit', 'transit'], ['layerKeepouts', 'keepouts']].forEach(([id, key]) => {
+    [['layerPhoto', 'photo'], ['layerStripes', 'stripes'], ['layerTransit', 'transit'], ['layerKeepouts', 'keepouts'], ['layerReplay', 'replay']].forEach(([id, key]) => {
         const btn = $(id);
         btn.addEventListener('click', () => {
             layers[key] = !layers[key];
@@ -1199,27 +1214,24 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // Stripe numbers in painting order, at the start of each stripe
+        // Pass numbers in painting order, just inside the start of each pass
         if (layers.stripes) {
-            const firsts = [];
-            const seen = new Set();
-            waypoints.forEach((wp) => {
-                if (wp.spray_active && !seen.has(wp.row)) {
-                    seen.add(wp.row);
-                    firsts.push(wp);
-                }
+            const passes = [];
+            waypoints.forEach((wp, i) => {
+                const next = waypoints[i + 1];
+                if (wp.type === 'PASS_START' && next) passes.push([wp, next]);
             });
             const pitch = wall.spray_width_mm * (1 - (wall.overlap_pct || 0) / 100) * s;
             const every = Math.max(1, Math.ceil(18 / Math.max(1, pitch)));
-            const vertical = (currentData.wall.direction || (currentData.layout && currentData.layout.direction)) === 'vertical';
-            firsts.forEach((wp, index) => {
-                if (index % every !== 0 && index !== firsts.length - 1) return;
-                const x = X(wp.x);
-                const y = Y(wp.y);
-                const inward = vertical ? 0 : (x < x0 + wallW / 2 ? 10 : -10);
-                const dy = vertical ? (y > y0 + wallH / 2 ? -12 : 12) : 0;
-                labelBox(ctx, String(index + 1), x + inward, y + dy, vertical ? 'center' : (inward >= 0 ? 'left' : 'right'),
-                    { bg: c.canvas, border: c.accent, text: c.text });
+            passes.forEach(([start, end], index) => {
+                if (index % every !== 0 && index !== passes.length - 1) return;
+                const x = X(start.x);
+                const y = Y(start.y);
+                const dx = Math.sign(X(end.x) - x);
+                const dy = Math.sign(Y(end.y) - y);
+                const number = String(start.pass || index + 1);
+                if (dx !== 0) labelBox(ctx, number, x + dx * 10, y, dx > 0 ? 'left' : 'right', { bg: c.canvas, border: c.accent, text: c.text });
+                else labelBox(ctx, number, x, y + dy * 14, 'center', { bg: c.canvas, border: c.accent, text: c.text });
             });
         }
 
@@ -1239,7 +1251,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Rover simulator replay: where the rover truly went (solid) and where it believed it was (dashed)
-        if (simResult && simResult.steps && simResult.steps.length) {
+        if (layers.replay && simResult && simResult.steps && simResult.steps.length) {
             const trace = (poses, dash, alpha) => {
                 ctx.save();
                 ctx.globalAlpha = alpha;
@@ -1249,7 +1261,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 ctx.setLineDash(dash);
                 ctx.strokeStyle = c.trace;
-                ctx.lineWidth = 1.75;
+                ctx.lineWidth = 1.25;
                 ctx.stroke();
                 ctx.restore();
             };
