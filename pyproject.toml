@@ -11,8 +11,3 @@ dependencies = [
     "opencv-python-headless==4.10.0.84",
     "onnxruntime==1.20.1",
 ]
-
-[tool.uv]
-# On PCs with Windows Smart App Control on, unsigned Python builds (including the ones uv downloads)
-# and their venv launchers are blocked. Use the signed python.org interpreter so `uv run` works.
-python-preference = "only-system"
