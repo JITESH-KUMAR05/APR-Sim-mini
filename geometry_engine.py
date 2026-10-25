@@ -13,6 +13,7 @@ import json
 from typing import Dict, List, Tuple, Any, Optional
 
 from obstacle_detector import ObstacleDetector, thresholds_for_sensitivity
+from region_planner import plan_regions
 
 log = logging.getLogger(__name__)
 
@@ -444,144 +445,11 @@ class GeometryEngine:
         safety_buffer_mm: float,
         obstacles: List[Dict[str, Any]]
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        """
-        Generate continuous Boustrophedon (serpentine zig-zag) coverage trajectory
-        with obstacle clipping and spray gate commands (Slide 6 & 9 of APR review).
-        """
-        # Effective nozzle step spacing accounting for overlap
-        overlap_factor = max(0.0, min(0.4, overlap_pct / 100.0))
-        effective_step = spray_width_mm * (1.0 - overlap_factor)
-        num_rows = max(2, int(math.ceil(wall_h_mm / effective_step)))
-
-        # Create buffered obstacle bounding boxes for collision safety
-        buffered_boxes = []
-        for obs in obstacles:
-            bx1 = max(0.0, obs["x"] - safety_buffer_mm)
-            by1 = max(0.0, obs["y"] - safety_buffer_mm)
-            bx2 = min(wall_w_mm, obs["x"] + obs["w"] + safety_buffer_mm)
-            by2 = min(wall_h_mm, obs["y"] + obs["h"] + safety_buffer_mm)
-            buffered_boxes.append({
-                "x1": bx1, "y1": by1,
-                "x2": bx2, "y2": by2,
-                "id": obs["id"]
-            })
-
-        waypoints: List[Dict[str, Any]] = []
-        total_dist_mm = 0.0
-        spray_dist_mm = 0.0
-        transit_dist_mm = 0.0
-
-        for r in range(num_rows):
-            # Center of the spray nozzle pass in mm - Sweep top-to-bottom starting at top-left
-            y_curr = wall_h_mm - ((r + 0.5) * effective_step)
-            y_curr = min(wall_h_mm - (spray_width_mm * 0.5), y_curr)
-            y_curr = max(spray_width_mm * 0.5, y_curr)
-
-            # Determine pass direction: Even rows L->R (starts top-left), Odd rows R->L
-            left_to_right = (r % 2 == 0)
-
-            # Find obstacle intervals intersecting this horizontal pass
-            intervals = []
-            for b in buffered_boxes:
-                if b["y1"] <= y_curr <= b["y2"]:
-                    intervals.append((b["x1"], b["x2"]))
-
-            # Merge overlapping intervals
-            intervals.sort(key=lambda inv: inv[0])
-            merged_intervals = []
-            for inv in intervals:
-                if not merged_intervals:
-                    merged_intervals.append(list(inv))
-                else:
-                    if inv[0] <= merged_intervals[-1][1]:
-                        merged_intervals[-1][1] = max(merged_intervals[-1][1], inv[1])
-                    else:
-                        merged_intervals.append(list(inv))
-
-            # Build sweep segment cut-points from 0 to wall_w_mm
-            points_on_row = []
-            curr_x = 0.0
-
-            for inv_start, inv_end in merged_intervals:
-                if inv_start > curr_x:
-                    # Paintable segment
-                    points_on_row.append((curr_x, inv_start, True))
-                # Obstacle keep-out segment
-                points_on_row.append((inv_start, inv_end, False))
-                curr_x = inv_end
-
-            if curr_x < wall_w_mm:
-                points_on_row.append((curr_x, wall_w_mm, True))
-
-            # Reverse row order if moving Right-to-Left
-            if not left_to_right:
-                points_on_row.reverse()
-                # For each segment, flip start and end
-                points_on_row = [(end, start, spray) for (start, end, spray) in points_on_row]
-
-            # Generate row waypoints
-            for seg_start_x, seg_end_x, is_spray in points_on_row:
-                seg_len = abs(seg_end_x - seg_start_x)
-                if seg_len < 1.0:
-                    continue
-
-                p_start = {
-                    "seq": len(waypoints) + 1,
-                    "x": round(seg_start_x, 1),
-                    "y": round(y_curr, 1),
-                    "z": self.defaults["standoff_dist_mm"],
-                    "spray_active": is_spray,
-                    "type": "PASS_START" if is_spray else "TRANSIT_START",
-                    "row": r + 1
-                }
-                waypoints.append(p_start)
-
-                p_end = {
-                    "seq": len(waypoints) + 1,
-                    "x": round(seg_end_x, 1),
-                    "y": round(y_curr, 1),
-                    "z": self.defaults["standoff_dist_mm"],
-                    "spray_active": is_spray,
-                    "type": "PASS_END" if is_spray else "TRANSIT_END",
-                    "row": r + 1
-                }
-                waypoints.append(p_end)
-
-                if is_spray:
-                    spray_dist_mm += seg_len
-                else:
-                    transit_dist_mm += seg_len
-                total_dist_mm += seg_len
-
-            # Add vertical inter-row transition waypoint if not at final row
-            if r < num_rows - 1:
-                next_y = wall_h_mm - ((r + 1.5) * effective_step)
-                next_y = min(wall_h_mm - (spray_width_mm * 0.5), next_y)
-                next_y = max(spray_width_mm * 0.5, next_y)
-                last_pt = waypoints[-1]
-                trans_pt = {
-                    "seq": len(waypoints) + 1,
-                    "x": last_pt["x"],
-                    "y": round(next_y, 1),
-                    "z": self.defaults["standoff_dist_mm"],
-                    "spray_active": False,
-                    "type": "ROW_TRANSITION",
-                    "row": r + 1
-                }
-                waypoints.append(trans_pt)
-                v_dist = abs(next_y - y_curr)
-                transit_dist_mm += v_dist
-                total_dist_mm += v_dist
-
-        stats = {
-            "num_rows": num_rows,
-            "effective_step_mm": round(effective_step, 1),
-            "total_distance_m": round(total_dist_mm / 1000.0, 2),
-            "spray_distance_m": round(spray_dist_mm / 1000.0, 2),
-            "transit_distance_m": round(transit_dist_mm / 1000.0, 2),
-            "waypoint_count": len(waypoints)
-        }
-        return waypoints, stats
+        """Region-by-region zigzag coverage in the top-left frame; the rover never drives over a keep-out."""
+        return plan_regions(
+            wall_w_mm, wall_h_mm, spray_width_mm, overlap_pct, safety_buffer_mm, obstacles,
+            self.defaults["standoff_dist_mm"],
+        )
 
     def compute_metrics(
         self,

@@ -64,10 +64,12 @@ class TestReplanLayout(unittest.TestCase):
         res = self.client.post("/api/replan", json={**WALL, **extra, "obstacles": obstacles})
         return res, json.loads(res.data)
 
-    def test_auto_follows_the_obstacles_a_tall_pipe_gets_vertical_stripes(self):
+    def test_auto_follows_the_obstacles_a_floor_to_ceiling_pipe_starts_on_the_bigger_side(self):
         res, data = self.replan([PIPE], start_corner="auto", direction="auto")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(data["layout"]["direction"], "vertical")
+        self.assertTrue(data["layout"]["start_corner"].endswith("right"))
+        self.assertIn("cut off", data["layout"]["reason"])
+        self.assertGreater(data["stats"]["unreached_area_m2"], 0)
         res, clear = self.replan([], start_corner="auto", direction="auto")
         self.assertEqual(clear["layout"]["mode"], "auto")
 
