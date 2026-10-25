@@ -1,538 +1,312 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>PaintPilot — Wall-to-3D CAD & Coverage Planning Console</title>
+	<title>APR Console</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+	<script src="/static/theme.js"></script>
 	<link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-	<main class="shell">
-		<!-- Header Instrumentation Bar -->
-		<header>
-			<div class="brand">
-				<div class="mark">✦</div>
-				<div>
-					<h1>
-						PAINTPILOT <span style="color:var(--muted);font-weight:400">/ WALL-TO-3D CAD CONSOLE</span>
-						<span class="grant-tag">MSME GRANT: INC25ETS084848</span>
-					</h1>
-					<small>Automated Painting Rover (APR) • WBS 1.2: 3D Geometry & Surface Segmentation Subsystem</small>
-				</div>
-			</div>
-			<div class="system-status">
-				<a href="/about" style="color:var(--muted);font-size:13px;margin-right:16px;text-decoration:underline;">About the project</a>
-				<div class="status-badge">
-					<i class="pulse"></i> SYSTEM READY · ROS 2 READY
-				</div>
+	<div class="console">
+
+		<!-- Top bar -->
+		<header class="topbar">
+			<button type="button" class="icon-btn only-narrow" id="openProps" aria-controls="propsPanel" aria-label="Show wall settings">
+				<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
+			</button>
+			<a class="brand" href="/" aria-label="APR Console home"><svg class="brand-mark" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13.5h12v-5H2v-5h12" /></svg><span>APR</span><span class="brand-sub">Console</span></a>
+
+			<nav class="tabs" role="tablist" aria-label="Views">
+				<button type="button" role="tab" class="tab" id="tabPlan" aria-selected="true" aria-controls="panelPlan">Plan</button>
+				<button type="button" role="tab" class="tab" id="tab3d" aria-selected="false" aria-controls="panel3d" tabindex="-1">3D</button>
+				<button type="button" role="tab" class="tab" id="tabSimulate" aria-selected="false" aria-controls="panelSimulate" tabindex="-1">Simulate</button>
+				<button type="button" role="tab" class="tab" id="tabExport" aria-selected="false" aria-controls="panelExport" tabindex="-1">Export</button>
+			</nav>
+
+			<div class="topbar-end">
+				<a class="quiet-link" href="/about" title="About the Automated Painting Rover project (MSME grant INC25ETS084848)">About</a>
+				<button type="button" class="icon-btn" id="themeToggle" aria-label="Switch to light theme">
+					<svg class="icon-sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.5" /><path d="M10 1.5v2.5M10 16v2.5M1.5 10h2.5M16 10h2.5M4 4l1.8 1.8M14.2 14.2L16 16M4 16l1.8-1.8M14.2 5.8L16 4" /></svg>
+					<svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.6A6.5 6.5 0 0 1 7.4 4.5a6.5 6.5 0 1 0 8.1 8.1z" /></svg>
+				</button>
+				<button type="button" class="icon-btn only-medium" id="openInspector" aria-controls="inspector" aria-label="Show plan details">
+					<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="1.5" /><path d="M12 3v14" /></svg>
+				</button>
 			</div>
 		</header>
 
-		<!-- Intro Banner & Pipeline Stage Indicator -->
-		<section class="intro">
-			<div>
-				<div class="eyebrow">01 / COMPUTER VISION & SURFACE SEGMENTATION</div>
-				<h2>Convert wall photo into 3D CAD model & rover trajectory.</h2>
-				<p>
-					Automated edge detection and contour hierarchy analysis classifies paintable surfaces vs. keep-out obstacles (windows, doors, electrical panels). Generates AutoCAD DXF, 3D WebGL Digital Twin, and continuous Boustrophedon rover toolpaths with safety buffer standoff.
-				</p>
-			</div>
-			<div class="pipeline-steps">
-				<span class="step-node complete">1. WALL PHOTO</span>
-				<i class="arrow">›</i>
-				<span class="step-node complete">2. OBSTACLE MASK</span>
-				<i class="arrow">›</i>
-				<span class="step-node active">3. 3D CAD TWIN</span>
-				<i class="arrow">›</i>
-				<span class="step-node active">4. BOUSTROPHEDON PATH</span>
-				<i class="arrow">›</i>
-				<span class="step-node">5. ROVER EXEC</span>
-			</div>
-		</section>
-
-		<!-- Main 3-Column Engineering Layout -->
-		<section class="layout">
-			<!-- Left Panel: Input Parameters & Calibration -->
-			<aside class="card">
-				<div class="card-title">
-					Physical Calibration <span>CONFIG</span>
+		<!-- Properties -->
+		<aside class="panel props drawer-left" id="propsPanel" aria-label="Wall settings">
+			<section class="group" aria-labelledby="gSource">
+				<h2 class="group-title" id="gSource">Source</h2>
+				<div class="chips" role="group" aria-label="Sample walls">
+					<button type="button" class="chip active" id="sampleResidential">Residential</button>
+					<button type="button" class="chip" id="sampleCommercial">Commercial</button>
+					<button type="button" class="chip" id="randomWallBtn" title="Draw a wall with hidden obstacles and plan it">Random wall</button>
 				</div>
-				<div class="controls">
-					<!-- Preset Benchmark Walls -->
-					<div class="preset-group">
-						<span class="preset-label">Benchmark Presets (1-Click Demo)</span>
-						<div class="preset-pills">
-							<button type="button" class="pill-btn active" id="sampleResidential">Residential Facade</button>
-							<button type="button" class="pill-btn" id="sampleCommercial">Commercial Wall</button>
-							<button type="button" class="pill-btn" id="randomWallBtn" title="Make a random wall photo with hidden obstacles and run the whole pipeline on it">Random Wall</button>
-						</div>
-					</div>
-
-					<!-- Image Upload Zone -->
-					<div class="upload" id="dropZone">
-						<strong>＋ Upload Wall Photo</strong>
-						<span id="fileName">Drop JPG, PNG, WEBP or click to browse</span>
-						<small style="color:var(--muted);margin-top:4px;">Shoot square-on, or mark the wall corners after upload</small>
-						<input id="fileInput" type="file" accept="image/*" />
-					</div>
-
-					<div class="corners-row" id="cornersRow" hidden>
-						<button type="button" class="pill-btn" id="cornersBtn">Mark wall corners</button>
-						<small id="cornersStatus" style="color:var(--muted);">Whole photo is treated as the wall.</small>
-					</div>
-
-					<!-- Physical Wall Dimension Inputs -->
-					<div class="param-group">
-						<label for="width">Wall Width <b><span id="widthValue">4000</span> mm</b></label>
-						<input id="width" type="number" min="1000" max="50000" step="100" value="4000" />
-					</div>
-
-					<div class="param-group">
-						<label for="height">Wall Height <b><span id="heightValue">2800</span> mm</b></label>
-						<input id="height" type="number" min="1000" max="30000" step="100" value="2800" />
-					</div>
-
-					<!-- Spray & Rover Parameters -->
-					<div class="param-group">
-						<label for="sprayWidth">Spray Nozzle Width <b><span id="sprayValue">250</span> mm</b></label>
-						<input id="sprayWidth" type="range" min="150" max="500" step="10" value="250" />
-					</div>
-
-					<div class="param-group">
-						<label for="overlap">Paint Overlap <b><span id="overlapValue">12</span> %</b></label>
-						<input id="overlap" type="range" min="0" max="35" step="1" value="12" />
-					</div>
-
-					<div class="param-group">
-						<label for="safetyBuffer">Keep-Out Buffer <b><span id="bufferValue">60</span> mm</b></label>
-						<input id="safetyBuffer" type="range" min="20" max="200" step="10" value="60" />
-					</div>
-
-					<div class="param-group">
-						<label for="sensitivity">Vision Sensitivity <b><span id="sensitivityValue">0.50</span></b></label>
-						<input id="sensitivity" type="range" min="0.1" max="1.0" step="0.05" value="0.5" />
-					</div>
-
-					<div class="param-group">
-						<label for="startCorner">Rover Start Corner</label>
-						<select id="startCorner">
-							<option value="auto" selected>Auto (best for this wall)</option>
-							<option value="bottom_left">Bottom-left (0,0)</option>
-							<option value="bottom_right">Bottom-right</option>
-							<option value="top_left">Top-left</option>
-							<option value="top_right">Top-right</option>
-						</select>
-					</div>
-
-					<div class="param-group">
-						<label for="stripeDirection">Stripe Direction</label>
-						<select id="stripeDirection">
-							<option value="auto" selected>Auto (best for this wall)</option>
-							<option value="horizontal">Horizontal rows</option>
-							<option value="vertical">Vertical columns</option>
-						</select>
-					</div>
-
-					<div class="layout-advice" id="layoutAdvice" style="display:none;"></div>
-
-					<label class="keep-note" for="keepCorrections">
-						<input type="checkbox" id="keepCorrections" checked />
-						When I change the detected obstacles, keep my photo and corrected boxes on this computer as training data (local app only; never uploaded)
-					</label>
-
-					<button type="button" class="primary-btn" id="simRoverBtn" title="Replay the mission in the C++ rover simulator (slip and gyro drift included). Local app only.">Run in Rover Simulator</button>
-					<div class="layout-advice" id="simReport" style="display:none;"></div>
-
-					<button class="primary-btn" id="generate">Generate Wall Map & CAD &nbsp;→</button>
+				<div class="drop" id="dropZone" role="button" tabindex="0" aria-describedby="fileName">
+					<span class="drop-title">Upload a wall photo</span>
+					<span class="drop-sub" id="fileName">Sample: residential facade</span>
+					<input id="fileInput" type="file" accept="image/*" hidden />
 				</div>
-			</aside>
-
-			<!-- Center Stage: 3D Digital Twin Viewport & 2D Map -->
-			<section class="card center-card">
-				<div class="card-title">
-					<span>Interactive Digital Twin Stage</span>
-					<div class="view-tabs">
-						<button type="button" class="view-tab-btn active" id="tab3d">3D DIGITAL TWIN</button>
-						<button type="button" class="view-tab-btn" id="tab2d">2D PLAN MAP</button>
-						<button type="button" class="view-tab-btn" id="tabTelemetry">WAYPOINTS LOG</button>
-					</div>
-				</div>
-
-				<div class="viewport-container">
-					<!-- 3D WebGL Canvas Container -->
-					<div id="viewport3d">
-						<!-- Top Left Floating Badges -->
-						<div class="viewport-overlay">
-							<span class="stage-badge">3D TWIN / WEBGL</span>
-							<button type="button" class="tool-badge" id="resetViewBtn" title="Reset Camera to Front View">Front</button>
-							<button type="button" class="tool-badge" id="isoViewBtn" title="Isometric 3D Perspective">Isometric</button>
-							<button type="button" class="tool-badge" id="topDownViewBtn" title="Top-down Orthogonal View">Top-Down</button>
-						</div>
-
-						<!-- Top Right Floating Tool Controls -->
-						<div class="viewport-overlay-right">
-							<button type="button" class="tool-badge" id="wireframeBtn" title="Toggle Wireframe Mesh">Wireframe</button>
-							<button type="button" class="tool-badge" id="togglePathBtn" title="Toggle Toolpath Trajectory">Path</button>
-							<button type="button" class="tool-badge" id="toggleObstaclesBtn" title="Toggle Keep-Out Obstacles">Keep-Outs</button>
-							<button type="button" class="tool-badge" id="simPlayBtn" style="color:var(--amber);border-color:#684f22;" title="Simulate Rover Nozzle Sweeps">▶ Simulate Sweep</button>
-						</div>
-					</div>
-
-					<!-- 2D High-Resolution Map Canvas -->
-					<div id="viewport2d">
-						<canvas id="canvas2d" width="1200" height="720"></canvas>
-					</div>
-
-					<!-- Telemetry Table View -->
-					<div id="telemetryView">
-						<table class="telemetry-table">
-							<thead>
-								<tr>
-									<th>SEQ</th>
-									<th>X (mm)</th>
-									<th>Y (mm)</th>
-									<th>Z STANDOFF (mm)</th>
-									<th>SPRAY SOLENOID</th>
-									<th>PASS TYPE</th>
-									<th>ROW #</th>
-								</tr>
-							</thead>
-							<tbody id="telemetryBody">
-								<!-- Populated dynamically via JS -->
-							</tbody>
-						</table>
-					</div>
-				</div>
-
-				<!-- Legend Color Codes -->
-				<div class="legend-bar">
-					<span class="paintable"><i></i> Paintable Target Face</span>
-					<span class="obstacle"><i></i> Keep-Out Obstacle (No-Paint)</span>
-					<span class="toolpath"><i></i> Active Spray Pass</span>
-					<span class="transit"><i></i> Rapid Transit / Turn</span>
-				</div>
-
-				<!-- Real-time Engineering Metrics Bar -->
-				<div class="metrics">
-					<div class="metric">
-						<small>Boustrophedon Passes</small>
-						<strong id="layoutValue">13 passes</strong>
-					</div>
-					<div class="metric">
-						<small>Planned Waypoints</small>
-						<strong id="cellsValue">74</strong>
-					</div>
-					<div class="metric">
-						<small>Net Paintable Area</small>
-						<strong id="areaValue">8.74 m²</strong>
-					</div>
-					<div class="metric">
-						<small>Rover Trajectory</small>
-						<strong id="distanceValue">54.6 m</strong>
-					</div>
+				<div class="corners" id="cornersRow" hidden>
+					<button type="button" class="btn btn-quiet" id="cornersBtn">Mark wall corners</button>
+					<span class="hint" id="cornersStatus">The whole photo is treated as the wall.</span>
 				</div>
 			</section>
 
-			<!-- Right Panel: Telemetry Status & CAD Exports -->
-			<aside class="card right-card">
-				<div class="card-title">
-					Robotics Telemetry <span>APR SPECS</span>
+			<section class="group" aria-labelledby="gWall">
+				<h2 class="group-title" id="gWall">Wall</h2>
+				<label class="row" for="width"><span>Width</span><span class="field-unit"><input class="field mono" id="width" type="number" min="1000" max="50000" step="100" value="4000" /><span class="unit">mm</span></span></label>
+				<label class="row" for="height"><span>Height</span><span class="field-unit"><input class="field mono" id="height" type="number" min="1000" max="30000" step="100" value="2800" /><span class="unit">mm</span></span></label>
+			</section>
+
+			<section class="group" aria-labelledby="gSpray">
+				<h2 class="group-title" id="gSpray">Spray</h2>
+				<div class="slider">
+					<label class="row" for="sprayWidth"><span>Nozzle width</span><output class="mono" id="sprayValue" for="sprayWidth">250 mm</output></label>
+					<input id="sprayWidth" type="range" min="150" max="500" step="10" value="250" />
 				</div>
-
-				<div class="readout">
-					<div class="k">Calibrated Wall Boundary</div>
-					<div class="v" id="statusWallBoundary">4000 × 2800 mm</div>
-					<div class="sub">Origin: lower-left · Cartesian plane</div>
+				<div class="slider">
+					<label class="row" for="overlap"><span>Overlap</span><output class="mono" id="overlapValue" for="overlap">12 %</output></label>
+					<input id="overlap" type="range" min="0" max="35" step="1" value="12" />
 				</div>
-
-				<div class="readout">
-					<div class="k">Active Spray Distance</div>
-					<div class="v" id="statusSprayDist">39.5 m (Active)</div>
-					<div class="sub">Non-spray transit suppressed</div>
+				<div class="slider">
+					<label class="row" for="safetyBuffer"><span>Keep-out margin</span><output class="mono" id="bufferValue" for="safetyBuffer">60 mm</output></label>
+					<input id="safetyBuffer" type="range" min="20" max="200" step="10" value="60" />
 				</div>
+			</section>
 
-				<div class="readout">
-					<div class="k">Paint Volume (50 µm DFT)</div>
-					<div class="v" id="paintVolValue">1.08 L</div>
-					<div class="sub">WBS 1.2 §3: 50±15 µm dry film thickness</div>
+			<section class="group" aria-labelledby="gDetect">
+				<h2 class="group-title" id="gDetect">Detection</h2>
+				<div class="slider">
+					<label class="row" for="sensitivity"><span>Sensitivity</span><output class="mono" id="sensitivityValue" for="sensitivity">0.50</output></label>
+					<input id="sensitivity" type="range" min="0.1" max="1.0" step="0.05" value="0.5" />
 				</div>
+				<p class="hint">Higher finds more, and asks you to check more.</p>
+			</section>
 
-				<div class="readout">
-					<div class="k">Est. Cycle Time @ 0.25 m/s</div>
-					<div class="v" id="cycleTimeValue">04:23</div>
-					<div class="sub">Nominal speed: 0.1–0.5 m/s range</div>
-				</div>
+			<section class="group" aria-labelledby="gLayout">
+				<h2 class="group-title" id="gLayout">Layout</h2>
+				<label class="row" for="startCorner"><span>Start corner</span>
+					<select class="field" id="startCorner">
+						<option value="auto" selected>Auto</option>
+						<option value="bottom_left">Bottom left</option>
+						<option value="bottom_right">Bottom right</option>
+						<option value="top_left">Top left</option>
+						<option value="top_right">Top right</option>
+					</select>
+				</label>
+				<label class="row" for="stripeDirection"><span>Stripes</span>
+					<select class="field" id="stripeDirection">
+						<option value="auto" selected>Auto</option>
+						<option value="horizontal">Horizontal</option>
+						<option value="vertical">Vertical</option>
+					</select>
+				</label>
+			</section>
 
-				<div class="readout">
-					<div class="k">Coverage Throughput</div>
-					<div class="v" id="throughputValue">119.4 m²/h</div>
-					<div class="sub">MSME Requirement: ≥10 m²/h target</div>
-				</div>
-
-				<div class="readout">
-					<div class="k">Keep-Out Obstacles</div>
-					<div class="v" id="activeObstacleCount">2 zones</div>
-					<div class="sub">Glazed windows, doors & fixtures</div>
-				</div>
-
-				<div class="confidence">
-					<div class="k">
-						CV SEGMENTATION CONFIDENCE
-						<b id="confidenceValue" style="float:right;color:var(--cyan)">94.2%</b>
-					</div>
-					<div class="bar"><div id="confidenceBar" style="width:94%;"></div></div>
-				</div>
-
-				<div class="detector-banner" id="detectorBanner" hidden>
-						Trained model not loaded. Using basic edge detection, which is less reliable on real walls.
-					</div>
-
-					<div class="review-panel" id="reviewPanel" hidden>
-						<div class="k">Obstacles to review <b id="reviewCount">0</b></div>
-						<p class="review-hint">The detector was unsure about these. Paint keeps clear of them until you confirm a class or dismiss them.</p>
-						<div id="reviewList"></div>
-					</div>
-
-					<!-- Multi-Format CAD & Robotics Mission Exports -->
-				<div class="exports">
-					<div class="k" style="margin-bottom:2px;">ENGINEERING EXPORTS</div>
-						<div class="export-caution" id="exportCaution" hidden></div>
-					<div class="export-grid">
-						<button type="button" class="export-btn primary-export" data-export="dxf">
-							↓ AutoCAD DXF (Layers)
-						</button>
-						<button type="button" class="export-btn" data-export="obj">
-							↓ 3D Wavefront OBJ (Color)
-						</button>
-						<button type="button" class="export-btn" data-export="zip" style="color:var(--amber);border-color:#654c1f;">
-							↓ 3D Bundle (.ZIP: OBJ+MTL)
-						</button>
-						<button type="button" class="export-btn" data-export="mtl">
-							↓ Material MTL
-						</button>
-						<button type="button" class="export-btn" data-export="json">
-							↓ ROS 2 Mission JSON
-						</button>
-						<button type="button" class="export-btn" data-export="csv">
-							↓ Waypoints CSV
-						</button>
-						<button type="button" class="export-btn" data-export="rover" style="color:var(--amber);border-color:#654c1f;">
-							↓ Rover Mission (.json)
-						</button>
-					</div>
-					<!-- Primary Mission Simulation Trigger -->
-					<button type="button" class="sim-launch-btn" id="openSimBtn">
-						<span class="sim-launch-icon">▶</span> LAUNCH ROVER MISSION SIMULATION
-					</button>
-				</div>
-			</aside>
-		</section>
-
-		<!-- Bottom Instrumentation: Pipeline Timeline & System Log -->
-		<section class="bottom">
-			<div class="card">
-				<h3>Autonomous Pipeline Sequence (WBS 1.2 / 1.3)</h3>
-				<div class="timeline">
-					<div class="event complete">
-						<div class="dot">✓</div>
-						<small>Image Input</small>
-					</div>
-					<div class="event complete">
-						<div class="dot">✓</div>
-						<small>Detect Obstacles</small>
-					</div>
-					<div class="event complete">
-						<div class="dot">✓</div>
-						<small>Buffer Mask</small>
-					</div>
-					<div class="event active">
-						<div class="dot">4</div>
-						<small>CAD & 3D Twin</small>
-					</div>
-					<div class="event active">
-						<div class="dot">5</div>
-						<small>Rover Trajectory</small>
-					</div>
-					<div class="event">
-						<div class="dot">6</div>
-						<small>ROS 2 Exec</small>
-					</div>
-				</div>
+			<div class="props-foot">
+				<button type="button" class="btn btn-primary" id="generate">Plan wall</button>
+				<p class="inline-error" id="planError" role="alert" hidden></p>
+				<label class="check" for="keepCorrections">
+					<input type="checkbox" id="keepCorrections" checked />
+					<span>Keep my corrections as training data on this computer. Photos are never uploaded.</span>
+				</label>
 			</div>
+		</aside>
 
-			<div class="card">
-				<h3>Mission Telemetry & Engine Log</h3>
-				<div class="terminal" id="log">
-					<div><b>09:41:01</b> &nbsp;PaintPilot CV Geometry Engine initialized</div>
-					<div><b>09:41:02</b> &nbsp;MSME Grant Ref: INC25ETS084848 compliance verified</div>
-					<div><b>09:41:03</b> &nbsp;Stand-off distance calibrated at 250 mm normal to plane</div>
-					<div class="success"><b>09:41:04</b> &nbsp;Ready for real-time segmentation and toolpath synthesis <span class="cursor">▌</span></div>
+		<!-- Stage -->
+		<main class="stage" id="stage">
+			<section class="view" role="tabpanel" id="panelPlan" aria-labelledby="tabPlan">
+				<div class="toolbar" role="toolbar" aria-label="Plan layers">
+					<button type="button" class="tool" id="fitBtn" title="Fit the wall to the view">Fit</button>
+					<span class="tool-sep" aria-hidden="true"></span>
+					<button type="button" class="tool on" id="layerPhoto" aria-pressed="true">Photo</button>
+					<button type="button" class="tool on" id="layerStripes" aria-pressed="true">Stripes</button>
+					<button type="button" class="tool on" id="layerTransit" aria-pressed="true">Moves</button>
+					<button type="button" class="tool on" id="layerKeepouts" aria-pressed="true">Keep-outs</button>
+					<button type="button" class="tool on" id="layerReplay" aria-pressed="true" hidden>Replay</button>
+					<span class="tool-sep" aria-hidden="true"></span>
+					<button type="button" class="tool" id="layoutWhy" aria-expanded="false" aria-controls="layoutAdvice">Why this layout?</button>
 				</div>
-			</div>
-		</section>
+				<div class="popover" id="layoutAdvice" hidden></div>
+				<div class="canvas-wrap" id="viewport2d">
+					<canvas id="canvas2d" aria-label="Wall plan with paint stripes and keep-out zones" role="img"></canvas>
+				</div>
+				<p class="legend" aria-hidden="true">
+					<span class="key key-stripe"></span>Paint stripe
+					<span class="key key-move"></span>Move, spray off
+					<span class="key key-keep"></span>Keep-out
+					<span class="key key-review"></span>Needs review
+					<span class="key key-true" data-replay hidden></span><span data-replay hidden>Replay: true path</span>
+				</p>
+			</section>
 
-		<!-- Footer Citation -->
-		<footer>
-			<strong>Automated Painting Rover (APR) Project</strong> • Funded by Ministry of MSME, Govt. of India (Grant Ref: INC25ETS084848, 10th PMAC)
-			<br />
-			WBS 1.2: Coverage Planning, Surface Segmentation & 3D Wall Geometry Subsystem • Airless Spray Arm Standoff Control
+			<section class="view" role="tabpanel" id="panel3d" aria-labelledby="tab3d" hidden>
+				<div class="toolbar" role="toolbar" aria-label="3D view">
+					<button type="button" class="tool" id="isoViewBtn">Angle</button>
+					<button type="button" class="tool" id="resetViewBtn">Front</button>
+					<button type="button" class="tool" id="topDownViewBtn">Top</button>
+					<span class="tool-sep" aria-hidden="true"></span>
+					<button type="button" class="tool on" id="togglePhotoBtn" aria-pressed="true">Photo</button>
+					<button type="button" class="tool on" id="togglePathBtn" aria-pressed="true">Path</button>
+					<button type="button" class="tool on" id="toggleObstaclesBtn" aria-pressed="true">Keep-outs</button>
+					<button type="button" class="tool on" id="toggleLabelsBtn" aria-pressed="true">Labels</button>
+					<button type="button" class="tool" id="wireframeBtn" aria-pressed="false">Wireframe</button>
+				</div>
+				<div class="canvas-wrap" id="viewport3d"></div>
+				<p class="legend" aria-hidden="true">Drag to turn · right-drag to pan · scroll to zoom</p>
+			</section>
+
+			<section class="view sim-view" role="tabpanel" id="panelSimulate" aria-labelledby="tabSimulate" hidden>
+				<div class="sim-columns">
+					<section class="sim-block sim-preview" aria-labelledby="hPreview">
+						<header class="block-head">
+							<div>
+								<h2 id="hPreview">Preview sweep</h2>
+								<p class="hint">An animation of the planned path in your browser. Use it to see the order of the passes; it is not a physics model.</p>
+							</div>
+							<div class="sim-controls">
+								<button type="button" class="btn btn-quiet" id="simStartBtn">Play</button>
+								<button type="button" class="btn btn-quiet" id="simPauseBtn">Pause</button>
+								<button type="button" class="btn btn-quiet" id="simResetBtn">Reset</button>
+								<div class="segmented" role="group" aria-label="Speed">
+									<button type="button" class="sim-speed-btn" data-speed="1" title="Real rover speed">1×</button>
+									<button type="button" class="sim-speed-btn active" data-speed="5">5×</button>
+									<button type="button" class="sim-speed-btn" data-speed="10">10×</button>
+									<button type="button" class="sim-speed-btn" data-speed="25">25×</button>
+								</div>
+							</div>
+						</header>
+						<div class="canvas-wrap sim-canvas" id="simCanvasWrap"><canvas id="simCanvas" role="img" aria-label="Animated preview of the painting path"></canvas></div>
+						<div class="progress" aria-hidden="true"><div id="simProgressBar"></div></div>
+						<dl class="stat-strip">
+							<div><dt>State</dt><dd id="simRoverStatus">Ready</dd></div>
+							<div><dt>Painted</dt><dd class="mono" id="simProgressPct">0%</dd></div>
+							<div><dt>Area</dt><dd class="mono" id="simAreaCovered">0.00 m²</dd></div>
+							<div><dt>Paint</dt><dd class="mono" id="simPaintVolume">0.00 L</dd></div>
+							<div><dt>Rover time</dt><dd class="mono" id="simElapsedTime">00:00</dd></div>
+							<div><dt>Waypoint</dt><dd class="mono" id="simWpProgress">0 / 0</dd></div>
+							<div><dt>Position, mm</dt><dd class="mono"><span id="simPosX">0</span>, <span id="simPosY">0</span></dd></div>
+						</dl>
+					</section>
+
+					<section class="sim-block" aria-labelledby="hPhysics">
+						<header class="block-head">
+							<div>
+								<h2 id="hPhysics">Physics replay</h2>
+								<p class="hint">Runs the exported mission through the rover's own firmware in a simulator, with 3% wheel slip and gyro drift. The true path is drawn on the plan.</p>
+							</div>
+							<button type="button" class="btn btn-primary" id="simRoverBtn">Run replay</button>
+						</header>
+						<p class="hint" id="simUnavailable" hidden>The rover simulator is not available here. It runs in the local app on a computer with a C++ compiler.</p>
+						<div class="report" id="simReport" hidden></div>
+					</section>
+				</div>
+			</section>
+
+			<section class="view export-view" role="tabpanel" id="panelExport" aria-labelledby="tabExport" hidden>
+				<p class="note-review" id="exportCaution" hidden></p>
+				<div class="export-groups">
+					<section class="export-group" aria-labelledby="hCad">
+						<h2 id="hCad">CAD</h2>
+						<button type="button" class="export-row" data-export="dxf"><span class="ext">DXF</span><span>Wall outline, keep-outs and stripes on separate layers, for AutoCAD</span></button>
+						<button type="button" class="export-row" data-export="zip"><span class="ext">ZIP</span><span>3D model of the wall, OBJ with its MTL material file</span></button>
+						<button type="button" class="export-row" data-export="obj"><span class="ext">OBJ</span><span>3D model only</span></button>
+						<button type="button" class="export-row" data-export="mtl"><span class="ext">MTL</span><span>Material file only</span></button>
+					</section>
+					<section class="export-group" aria-labelledby="hRover">
+						<h2 id="hRover">Rover</h2>
+						<button type="button" class="export-row" data-export="rover"><span class="ext">JSON</span><span>Rover mission: the step list the rover runs, with a checksum</span></button>
+						<button type="button" class="export-row" data-export="csv"><span class="ext">CSV</span><span>Waypoints: every point of the path, with spray on or off</span></button>
+					</section>
+					<section class="export-group" aria-labelledby="hManifest">
+						<h2 id="hManifest">Manifest</h2>
+						<button type="button" class="export-row" data-export="json"><span class="ext">JSON</span><span>Plan summary: wall, obstacles, settings and metrics</span></button>
+					</section>
+				</div>
+				<section class="waypoints" aria-labelledby="hWaypoints">
+					<h2 id="hWaypoints">Waypoints <span class="muted" id="waypointNote"></span></h2>
+					<div class="table-wrap">
+						<table class="waypoint-table">
+							<thead><tr><th>#</th><th>x mm</th><th>y mm</th><th>Spray</th><th>Kind</th><th>Row</th></tr></thead>
+							<tbody id="telemetryBody"></tbody>
+						</table>
+					</div>
+				</section>
+			</section>
+		</main>
+
+		<!-- Inspector -->
+		<aside class="panel inspector drawer-right" id="inspector" aria-label="Plan details">
+			<section class="group">
+				<h2 class="group-title">Plan</h2>
+				<dl class="readouts">
+					<div><dt>Wall</dt><dd class="mono" id="statusWallBoundary">–</dd></div>
+					<div><dt>Paint needed</dt><dd class="mono" id="paintVolValue">–</dd></div>
+					<div><dt>Spray path</dt><dd class="mono" id="statusSprayDist">–</dd></div>
+					<div><dt>Total path</dt><dd class="mono" id="distanceValue">–</dd></div>
+					<div><dt>Time at speed</dt><dd class="mono" id="cycleTimeValue">–</dd></div>
+					<div><dt>Paintable area</dt><dd class="mono" id="areaValue">–</dd></div>
+					<div><dt>Passes</dt><dd class="mono" id="layoutValue">–</dd></div>
+					<div><dt>Waypoints</dt><dd class="mono" id="cellsValue">–</dd></div>
+				</dl>
+			</section>
+
+			<p class="note" id="unreachedNote" hidden></p>
+
+			<p class="note" id="detectorBanner" hidden>Trained model not loaded. Basic edge detection is less reliable on real walls, so check the keep-outs.</p>
+
+			<section class="group" id="reviewPanel" hidden aria-labelledby="hReview">
+				<h2 class="group-title review-title" id="hReview">Check these <span class="count" id="reviewCount">0</span></h2>
+				<p class="hint">The detector was unsure. Paint keeps clear of them until you decide.</p>
+				<div id="reviewList"></div>
+			</section>
+
+			<section class="group" aria-labelledby="hObstacles">
+				<h2 class="group-title" id="hObstacles">Keep-outs <span class="count" id="activeObstacleCount">0</span></h2>
+				<ul class="obstacle-list" id="obstacleList"></ul>
+			</section>
+		</aside>
+
+		<!-- Status bar -->
+		<footer class="statusbar">
+			<span class="status-item" id="statusDetector"><span class="dot" aria-hidden="true"></span>Checking detector…</span>
+			<span class="status-item" id="statusSimulator">Simulator: checking…</span>
+			<span class="status-item mono only-wide" id="statusWall"></span>
+			<span class="status-item only-wide" id="statusLayout"></span>
+			<button type="button" class="status-item status-log" id="logToggle" aria-expanded="false" aria-controls="logDrawer"><span id="statusLast">Ready</span><span class="muted"> · Activity</span></button>
 		</footer>
-	</main>
+
+		<div class="log-drawer" id="logDrawer" hidden>
+			<header class="block-head"><h2>Activity</h2><button type="button" class="btn btn-quiet" id="logClose">Close</button></header>
+			<ol class="log" id="log"></ol>
+		</div>
+
+		<div class="scrim" id="scrim" hidden></div>
+	</div>
 
 	<!-- Wall corner picker -->
-	<section class="corner-modal" id="cornerModal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cornerTitle">
-		<div class="corner-dialog">
-			<h3 id="cornerTitle">Mark the wall corners</h3>
-			<p id="cornerHint">Click the wall's top-left corner.</p>
+	<div class="dialog-backdrop" id="cornerModal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cornerTitle">
+		<div class="dialog">
+			<h2 id="cornerTitle">Mark the wall corners</h2>
+			<p class="hint" id="cornerHint">Click the wall's top-left corner.</p>
 			<canvas id="cornerCanvas" width="900" height="600"></canvas>
-			<div class="corner-actions">
-				<button type="button" class="pill-btn" id="cornerUndoBtn">Undo last point</button>
-				<button type="button" class="pill-btn" id="cornerClearBtn">Use whole photo</button>
-				<button type="button" class="pill-btn" id="cornerCancelBtn">Cancel</button>
-				<button type="button" class="primary-btn" id="cornerApplyBtn" disabled>Apply corners</button>
+			<div class="dialog-actions">
+				<button type="button" class="btn btn-quiet" id="cornerUndoBtn">Undo last point</button>
+				<button type="button" class="btn btn-quiet" id="cornerClearBtn">Use the whole photo</button>
+				<span class="spacer"></span>
+				<button type="button" class="btn btn-quiet" id="cornerCancelBtn">Cancel</button>
+				<button type="button" class="btn btn-primary" id="cornerApplyBtn" disabled>Apply corners</button>
 			</div>
 		</div>
-	</section>
+	</div>
 
-	<!-- Full-Screen Autonomous Rover Simulation Modal Deck -->
-	<section class="sim-modal-overlay" id="simModalOverlay" style="display:none;">
-		<div class="sim-deck">
-			<!-- Sim Header -->
-			<header class="sim-header">
-				<div class="brand">
-					<div class="mark">✦</div>
-					<div>
-						<h2>APR-01 AUTONOMOUS MISSION SIMULATION</h2>
-						<small>Real-time Kinematic Coverage & Keep-Out Obstacle Avoidance · MSME Ref: INC25ETS084848</small>
-					</div>
-				</div>
-
-				<div class="sim-mission-controls">
-					<!-- Play/Pause/Reset Controls -->
-					<div class="sim-btn-group">
-						<button type="button" class="sim-ctrl-btn primary" id="simStartBtn">▶ Start Simulation</button>
-						<button type="button" class="sim-ctrl-btn" id="simPauseBtn">⏸ Pause</button>
-						<button type="button" class="sim-ctrl-btn" id="simResetBtn">↺ Reset</button>
-					</div>
-
-					<!-- Speed Controls -->
-					<div class="sim-btn-group">
-						<button type="button" class="sim-speed-btn active" data-speed="1">1×</button>
-						<button type="button" class="sim-speed-btn" data-speed="2">2×</button>
-						<button type="button" class="sim-speed-btn" data-speed="5">5×</button>
-					</div>
-
-					<!-- View Mode Controls -->
-					<div class="sim-btn-group">
-						<button type="button" class="sim-mode-btn active" data-mode="hybrid">Hybrid</button>
-						<button type="button" class="sim-mode-btn" data-mode="cells">Grid Cells</button>
-						<button type="button" class="sim-mode-btn" data-mode="realistic">Realistic</button>
-					</div>
-
-					<!-- Close Button -->
-					<button type="button" class="sim-close-btn" id="closeSimBtn">✕ Back to Console</button>
-				</div>
-			</header>
-
-			<!-- Sim Main Stage -->
-			<div class="sim-stage-layout">
-				<!-- Left Canvas Area -->
-				<div class="sim-canvas-panel">
-					<div class="sim-canvas-wrap" id="simCanvasWrap">
-						<canvas id="simCanvas"></canvas>
-					</div>
-					<!-- Sub-bar with legends -->
-					<div class="sim-legend-bar">
-						<span><i style="background:#5ce1d2;"></i> Painted Surface (50µm DFT)</span>
-						<span><i style="background:#fa746e;"></i> Keep-Out Obstacle (No-Paint)</span>
-						<span><i style="background:#f4b860;"></i> Rover Active Spray Fan</span>
-						<span><i style="background:#9d4edd;"></i> Rapid Bypass Transit</span>
-						<span style="margin-left:auto;color:var(--muted);font-size:10.5px;">Adhesion Mode: Continuous Vacuum Grip ≥ 2x Body Weight</span>
-					</div>
-				</div>
-
-				<!-- Right Telemetry Cockpit -->
-				<aside class="sim-telemetry-panel">
-					<div class="sim-telemetry-header">
-						<span>ROVER TELEMETRY</span>
-						<span class="status-indicator live"><i class="pulse"></i> TELEMETRY LIVE</span>
-					</div>
-
-					<div class="sim-telemetry-readouts">
-						<div class="sim-readout-card">
-							<small>Rover Operational State</small>
-							<strong id="simRoverStatus">IDLE</strong>
-							<span class="telemetry-badge bypass-transit" id="simSolenoidState">CLOSED · STANDBY</span>
-						</div>
-
-						<div class="sim-readout-grid">
-							<div class="sim-mini-card">
-								<small>Position X</small>
-								<strong id="simPosX">0 mm</strong>
-							</div>
-							<div class="sim-mini-card">
-								<small>Position Y</small>
-								<strong id="simPosY">0 mm</strong>
-							</div>
-							<div class="sim-mini-card">
-								<small>Z Standoff</small>
-								<strong id="simPosZ">250.0 mm</strong>
-							</div>
-							<div class="sim-mini-card">
-								<small>Vacuum Force</small>
-								<strong id="simVacuumForce">320 N</strong>
-							</div>
-						</div>
-
-						<div class="sim-readout-card">
-							<div style="display:flex;justify-content:space-between;align-items:center;">
-								<small>Waypoint Trajectory Progress</small>
-								<b id="simProgressPct" style="color:var(--cyan);font:11px 'DM Mono';">0%</b>
-							</div>
-							<div class="sim-bar-wrap">
-								<div id="simProgressBar" style="width:0%;"></div>
-							</div>
-							<div style="display:flex;justify-content:space-between;margin-top:6px;font:11px 'DM Mono';color:var(--muted);">
-								<span>Waypoint Index</span>
-								<strong id="simWpProgress" style="color:var(--text);">0 / 0</strong>
-							</div>
-						</div>
-
-						<div class="sim-readout-grid">
-							<div class="sim-mini-card">
-								<small>Area Covered</small>
-								<strong id="simAreaCovered" style="color:var(--cyan);">0.00 m²</strong>
-							</div>
-							<div class="sim-mini-card">
-								<small>Paint Consumed</small>
-								<strong id="simPaintVolume" style="color:var(--amber);">0.00 L</strong>
-							</div>
-							<div class="sim-mini-card">
-								<small>Target DFT</small>
-								<strong style="color:var(--text);">50 µm</strong>
-							</div>
-							<div class="sim-mini-card">
-								<small>Mission Time</small>
-								<strong id="simElapsedTime">00:00</strong>
-							</div>
-						</div>
-
-						<!-- Live Mission Terminal Log -->
-						<div class="sim-terminal-wrap">
-							<div class="sim-terminal-title">ROVER EVENT LOG (SITL)</div>
-							<div class="sim-terminal" id="simTerminal">
-								<div class="sim-log-line info"><b>00:00:00</b> &nbsp;Autonomous SITL subsystem initialized</div>
-								<div class="sim-log-line info"><b>00:00:01</b> &nbsp;Wall coordinate frame calibrated [WALL-X / WALL-Y]</div>
-								<div class="sim-log-line warn"><b>00:00:01</b> &nbsp;Keep-out safety standoff buffer active (60 mm)</div>
-							</div>
-						</div>
-					</div>
-				</aside>
-			</div>
-		</div>
-	</section>
-
-	<!-- Scripts: Three.js 3D WebGL Engine, OrbitControls, 3D Twin Viewer, Rover Simulation Engine, and App Controller -->
 	<script src="/static/three.min.js"></script>
 	<script src="/static/OrbitControls.js"></script>
 	<script src="/static/viewer3d.js"></script>

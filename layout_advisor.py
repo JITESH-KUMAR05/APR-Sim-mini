@@ -4,10 +4,13 @@ Pick the start corner and the stripe direction for a wall from the obstacles in 
 Every layout (4 corners x 2 directions) is planned with the real planner and scored with rules that can
 be explained to an operator, not with a learned model:
 
-  1. fewest obstacle crossings: stretches where the rover must drive across a no-paint zone with spray off,
+  1. least wall left unpainted because the rover cannot reach it (a keep-out from wall edge to wall edge
+     cuts the wall in two, and only the side the rover starts on is painted),
   2. then least non-painting travel (rounded to 0.1 m),
   3. then fewest turns,
   4. then the shortest total path, and after that the default order (bottom-left, horizontal first).
+
+The rover never drives over a keep-out: the planner paints the wall region by region (region_planner.py).
 
 A layout the rover would refuse is ranked below every layout it accepts, whatever its score: the firmware
 answers `NAK TOO_LONG` to a spray MOVE that would run the pump over its limit (about 7 m at 250 mm/s) and
@@ -80,7 +83,8 @@ def evaluate_layouts(
         options.append({
             "start_corner": corner,
             "direction": direction,
-            "crossings": sum(1 for wp in waypoints if wp["type"] == "TRANSIT_START"),
+            "regions": stats["num_regions"],
+            "unreached_m2": stats["unreached_area_m2"],
             "transit_m": stats["transit_distance_m"],
             "spray_m": stats["spray_distance_m"],
             "total_m": stats["total_distance_m"],
@@ -88,7 +92,7 @@ def evaluate_layouts(
             "feasible": _feasible(waypoints, wall_w_mm, wall_h_mm, max_speed_mps, pump_max_s),
             "_order": order,
         })
-    options.sort(key=lambda o: (not o["feasible"], o["crossings"], round(o["transit_m"], 1), o["turns"], o["total_m"], o["_order"]))
+    options.sort(key=lambda o: (not o["feasible"], o["unreached_m2"], round(o["transit_m"], 1), o["turns"], o["total_m"], o["_order"]))
     for rank, option in enumerate(options, 1):
         option["rank"] = rank
         del option["_order"]
@@ -96,10 +100,13 @@ def evaluate_layouts(
 
 
 def describe(option: Dict[str, Any]) -> str:
-    crossings = option["crossings"]
-    return (f"{option['direction']} stripes from the {_CORNER_WORDS[option['start_corner']]} corner: "
-            f"{crossings} obstacle crossing{'' if crossings == 1 else 's'}, "
+    regions = option["regions"]
+    text = (f"{option['direction']} stripes from the {_CORNER_WORDS[option['start_corner']]} corner: "
+            f"{regions} region{'' if regions == 1 else 's'}, "
             f"{option['transit_m']:.1f} m of non-painting travel, {option['turns']} turns")
+    if option["unreached_m2"] > 0:
+        text += f", {option['unreached_m2']:.2f} m² cut off by a keep-out and left unpainted"
+    return text
 
 
 def choose_layout(

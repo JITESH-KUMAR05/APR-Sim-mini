@@ -21,23 +21,31 @@ class TestEvaluate(unittest.TestCase):
                          {(c, d) for c in START_CORNERS for d in DIRECTIONS})
         for rank, option in enumerate(result, 1):
             self.assertEqual(option["rank"], rank)
-            for key in ("crossings", "transit_m", "total_m", "spray_m", "turns"):
+            for key in ("regions", "unreached_m2", "transit_m", "total_m", "spray_m", "turns"):
                 self.assertIn(key, option)
 
-    def test_the_list_is_sorted_by_crossings_then_non_painting_travel_then_turns(self):
+    def test_the_list_is_sorted_by_unreached_wall_then_non_painting_travel_then_turns(self):
         result = options([WINDOW, DOOR])
-        keys = [(o["crossings"], round(o["transit_m"], 1), o["turns"]) for o in result]
+        keys = [(o["unreached_m2"], round(o["transit_m"], 1), o["turns"]) for o in result]
         self.assertEqual(keys, sorted(keys))
 
-    def test_a_tall_pipe_makes_vertical_stripes_cross_it_less_than_horizontal_ones(self):
-        by = {(o["start_corner"], o["direction"]): o for o in options([TALL_PIPE])}
-        self.assertGreater(by[("bottom_left", "horizontal")]["crossings"], by[("bottom_left", "vertical")]["crossings"])
-        self.assertEqual(options([TALL_PIPE])[0]["direction"], "vertical")
+    def test_a_floor_to_ceiling_pipe_cuts_the_wall_and_the_rover_starts_on_the_bigger_side(self):
+        result = options([TALL_PIPE])
+        by = {(o["start_corner"], o["direction"]): o for o in result}
+        left, right = by[("bottom_left", "horizontal")], by[("bottom_right", "horizontal")]
+        self.assertGreater(left["unreached_m2"], right["unreached_m2"])  # the strip left of the pipe is the small side
+        self.assertGreater(right["unreached_m2"], 0)
+        self.assertTrue(result[0]["start_corner"].endswith("right"))
 
-    def test_a_clear_wall_has_no_crossings(self):
+    def test_a_clear_wall_is_one_region_with_nothing_cut_off(self):
         for option in options([]):
-            self.assertEqual(option["crossings"], 0)
+            self.assertEqual((option["regions"], option["unreached_m2"]), (1, 0))
             self.assertAlmostEqual(option["transit_m"] + option["spray_m"], option["total_m"], delta=0.02)
+
+    def test_a_window_in_the_middle_splits_the_wall_into_regions(self):
+        for option in options([WINDOW]):
+            self.assertGreater(option["regions"], 1)
+            self.assertEqual(option["unreached_m2"], 0)
 
     def test_scoring_does_not_change_the_obstacles(self):
         obstacles = [dict(WINDOW), dict(DOOR)]
@@ -52,8 +60,8 @@ class TestChoose(unittest.TestCase):
         self.assertEqual(choice["mode"], "auto")
         self.assertEqual((choice["start_corner"], choice["direction"]),
                          (choice["options"][0]["start_corner"], choice["options"][0]["direction"]))
-        self.assertIn("vertical", choice["reason"])
-        self.assertIn("crossing", choice["reason"])
+        self.assertIn("cut off", choice["reason"])
+        self.assertIn("region", choice["reason"])
 
     def test_a_fixed_corner_limits_the_search_to_that_corner(self):
         choice = choose_layout(GeometryEngine(), W, H, 250.0, 12.0, 60.0, [WINDOW], "top_right", "auto")

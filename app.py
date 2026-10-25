@@ -6,6 +6,7 @@ Pair-programmed for presentation & engineering demonstration.
 
 import os
 import secrets
+import shutil
 import uuid
 import sys
 import io
@@ -87,6 +88,18 @@ def about():
 def serve_static(filename):
     """Explicit static handler for serverless environments (Vercel)."""
     return send_from_directory(STATIC_DIR, filename)
+
+
+@app.route("/api/capabilities", methods=["GET"])
+def capabilities():
+    """What this running app can do, so the console shows only true status."""
+    simulator = (
+        not os.environ.get("VERCEL")
+        and os.path.isdir(os.path.join(BASE_DIR, "rover", "sim"))
+        and shutil.which("g++") is not None
+    )
+    detector = "yolo11n-onnx" if geometry_engine.detector is not None else "classical-fallback"
+    return jsonify({"detector": detector, "simulator": bool(simulator)})
 
 
 @app.route("/api/samples", methods=["GET"])

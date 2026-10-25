@@ -1,8 +1,7 @@
 /**
- * PaintPilot 3D Digital Twin Viewer
- * High-performance WebGL renderer powered by Three.js
- * Supports 360° orbital rotation, pan, zoom, layer toggles, and animated rover traversal.
- * Reference: APR Software Subsystem (MSME Grant INC25ETS084848 / WBS 1.2 §3)
+ * 3D view of the planned wall (Three.js): the wall with its photo, the keep-outs as recesses or
+ * fixtures with their names, and the painting path just off the wall face, each stripe as wide as
+ * the spray. Colours come from the theme tokens; applyTheme() redraws.
  */
 
 class WallViewer3D {
@@ -12,485 +11,352 @@ class WallViewer3D {
         this.camera = null;
         this.renderer = null;
         this.controls = null;
+        this.grid = null;
         this.wallGroup = null;
         this.pathGroup = null;
         this.obstacleGroup = null;
-        this.roverMarker = null;
-
-        this.animationId = null;
-        this.isSimulating = false;
-        this.simIndex = 0;
-        this.simWaypoints = [];
-        this.simSpeed = 1.0;
+        this.labelGroup = null;
 
         this.currentData = null;
+        this.photo = null;
+        this.photoTexture = null;
         this.wireframeMode = false;
         this.showPath = true;
         this.showObstacles = true;
+        this.showPhoto = true;
+        this.showLabels = true;
 
         this.init();
     }
 
+    colour(name) {
+        return new THREE.Color(window.APRTheme.color(name));
+    }
+
     init() {
         if (!this.container) return;
-
         const width = this.container.clientWidth || 800;
         const height = this.container.clientHeight || 500;
 
-        // 1. Scene setup
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x060f14); // Deep industrial slate
+        this.scene.background = this.colour('canvas');
 
-        // Subtle fog for depth perception
-        this.scene.fog = new THREE.FogExp2(0x060f14, 0.08);
-
-        // 2. Camera setup
-        this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+        this.camera = new THREE.PerspectiveCamera(40, width / height, 0.05, 100);
         this.camera.position.set(0, 0, 7.5);
 
-        // 3. Renderer setup
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
         this.renderer.setSize(width, height);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.container.appendChild(this.renderer.domElement);
 
-        // 4. OrbitControls
         if (THREE.OrbitControls) {
             this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
             this.controls.enableDamping = true;
             this.controls.dampingFactor = 0.08;
             this.controls.screenSpacePanning = true;
-            this.controls.minDistance = 1.5;
-            this.controls.maxDistance = 25.0;
+            this.controls.minDistance = 0.8;
+            this.controls.maxDistance = 30.0;
         }
 
-        // 5. Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
-        this.scene.add(ambientLight);
+        this.scene.add(new THREE.HemisphereLight(0xffffff, 0x808080, 0.7));
+        const keyLight = new THREE.DirectionalLight(0xffffff, 0.55);
+        keyLight.position.set(4, 6, 8);
+        this.scene.add(keyLight);
 
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
-        dirLight.position.set(5, 8, 10);
-        dirLight.castShadow = true;
-        this.scene.add(dirLight);
-
-        const fillLight = new THREE.DirectionalLight(0x5ce1d2, 0.3);
-        fillLight.position.set(-6, -4, 4);
-        this.scene.add(fillLight);
-
-        // 6. Ground Reference Grid
-        this.grid = new THREE.GridHelper(16, 32, 0x23424a, 0x10252b);
-        this.grid.position.y = -1.4;
-        this.scene.add(this.grid);
-
-        // Groups for dynamic geometry
         this.wallGroup = new THREE.Group();
         this.pathGroup = new THREE.Group();
         this.obstacleGroup = new THREE.Group();
-        this.scene.add(this.wallGroup);
-        this.scene.add(this.pathGroup);
-        this.scene.add(this.obstacleGroup);
+        this.labelGroup = new THREE.Group();
+        this.scene.add(this.wallGroup, this.pathGroup, this.obstacleGroup, this.labelGroup);
+        this.makeGrid(-1.4, 16);
 
-        // Animated Rover Nozzle Indicator
-        this.createRoverMarker();
-
-        // Handle window resize
         window.addEventListener('resize', () => this.onResize());
-
-        // Start render loop
         this.animate = this.animate.bind(this);
         requestAnimationFrame(this.animate);
     }
 
-    createRoverMarker() {
-        const markerGroup = new THREE.Group();
-
-        // Nozzle cylinder body
-        const geom = new THREE.CylinderGeometry(0.04, 0.06, 0.15, 16);
-        const mat = new THREE.MeshStandardMaterial({
-            color: 0xf4b860,
-            metalness: 0.8,
-            roughness: 0.2,
-            emissive: 0xf4b860,
-            emissiveIntensity: 0.4
-        });
-        const mesh = new THREE.Mesh(geom, mat);
-        mesh.rotation.x = Math.PI / 2;
-        markerGroup.add(mesh);
-
-        // Spray cone indicator (semi-transparent)
-        const coneGeom = new THREE.ConeGeometry(0.18, 0.35, 16, 1, true);
-        const coneMat = new THREE.MeshBasicMaterial({
-            color: 0x5ce1d2,
-            transparent: true,
-            opacity: 0.35,
-            side: THREE.DoubleSide
-        });
-        const coneMesh = new THREE.Mesh(coneGeom, coneMat);
-        coneMesh.rotation.x = -Math.PI / 2;
-        coneMesh.position.z = -0.18;
-        markerGroup.add(coneMesh);
-
-        markerGroup.visible = false;
-        this.roverMarker = markerGroup;
-        this.scene.add(markerGroup);
+    makeGrid(y, size) {
+        if (this.grid) {
+            this.scene.remove(this.grid);
+            this.grid.geometry.dispose();
+            this.grid.material.dispose();
+        }
+        const line = this.colour('line');
+        this.grid = new THREE.GridHelper(size, Math.round(size * 2), line, line);
+        this.grid.material.transparent = true;
+        this.grid.material.opacity = 0.6;
+        this.grid.position.y = y;
+        this.scene.add(this.grid);
     }
 
     onResize() {
         if (!this.container || !this.renderer || !this.camera) return;
         const width = this.container.clientWidth;
         const height = this.container.clientHeight;
+        if (!width || !height) return;
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(width, height);
     }
 
-    loadWallData(data) {
+    // Theme switched: new background and grid, and the wall rebuilt in the new colours, camera kept
+    applyTheme() {
+        if (!this.scene) return;
+        this.scene.background = this.colour('canvas');
+        if (this.currentData) this.loadWallData(this.currentData, { keepCamera: true });
+        else this.makeGrid(-1.4, 16);
+    }
+
+    // The wall photo, painted on the wall face (null for none)
+    setPhoto(image) {
+        if (this.photoTexture) this.photoTexture.dispose();
+        this.photo = image;
+        this.photoTexture = null;
+        if (image && window.THREE) {
+            this.photoTexture = new THREE.Texture(image);
+            this.photoTexture.needsUpdate = true;
+        }
+        if (this.currentData) this.loadWallData(this.currentData, { keepCamera: true });
+    }
+
+    clearGroup(group) {
+        while (group.children.length > 0) {
+            const obj = group.children.pop();
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                if (obj.material.map && obj.material.map !== this.photoTexture) obj.material.map.dispose();
+                obj.material.dispose();
+            }
+        }
+    }
+
+    edges(width, height, colour, x, y, z, dashed) {
+        const geometry = new THREE.EdgesGeometry(new THREE.PlaneGeometry(width, height));
+        const material = dashed
+            ? new THREE.LineDashedMaterial({ color: colour, dashSize: 0.05, gapSize: 0.03 })
+            : new THREE.LineBasicMaterial({ color: colour });
+        const lines = new THREE.LineSegments(geometry, material);
+        if (dashed) lines.computeLineDistances();
+        lines.position.set(x, y, z);
+        return lines;
+    }
+
+    // A flat name tag that always faces the camera: the keep-out's name and its size in mm
+    label(name, size, tone, heightM) {
+        const css = (n) => window.APRTheme.color(n);
+        const scale = 2;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const nameFont = `500 ${13 * scale}px "IBM Plex Sans", system-ui, sans-serif`;
+        const sizeFont = `400 ${12 * scale}px "IBM Plex Mono", ui-monospace, monospace`;
+        ctx.font = nameFont;
+        const nameW = ctx.measureText(name).width;
+        ctx.font = sizeFont;
+        const sizeW = ctx.measureText(size).width;
+        const pad = 8 * scale;
+        canvas.width = Math.ceil(nameW + sizeW + pad * 3);
+        canvas.height = 26 * scale;
+        ctx.fillStyle = css('panel');
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = tone;
+        ctx.lineWidth = scale;
+        ctx.strokeRect(scale / 2, scale / 2, canvas.width - scale, canvas.height - scale);
+        ctx.textBaseline = 'middle';
+        ctx.font = nameFont;
+        ctx.fillStyle = tone;
+        ctx.fillText(name, pad, canvas.height / 2 + scale);
+        ctx.font = sizeFont;
+        ctx.fillStyle = css('muted');
+        ctx.fillText(size, pad * 2 + nameW, canvas.height / 2 + scale);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+        sprite.scale.set(heightM * canvas.width / canvas.height, heightM, 1);
+        sprite.renderOrder = 10;
+        return sprite;
+    }
+
+    loadWallData(data, options = {}) {
+        if (!this.scene) return;
         this.currentData = data;
-        this.stopSimulation();
+        [this.wallGroup, this.obstacleGroup, this.pathGroup, this.labelGroup].forEach((group) => this.clearGroup(group));
 
-        // Clear existing models
-        while (this.wallGroup.children.length > 0) {
-            const obj = this.wallGroup.children.pop();
-            if (obj.geometry) obj.geometry.dispose();
-            this.wallGroup.remove(obj);
-        }
-        while (this.obstacleGroup.children.length > 0) {
-            const obj = this.obstacleGroup.children.pop();
-            if (obj.geometry) obj.geometry.dispose();
-            this.obstacleGroup.remove(obj);
-        }
-        while (this.pathGroup.children.length > 0) {
-            const obj = this.pathGroup.children.pop();
-            if (obj.geometry) obj.geometry.dispose();
-            this.pathGroup.remove(obj);
-        }
-
+        const tone = {
+            wall: this.colour('wall'), panel: this.colour('panel'), canvas: this.colour('canvas'),
+            strong: this.colour('strong'), muted: this.colour('muted'), accent: this.colour('accent'),
+            keep: this.colour('keep'), review: this.colour('review')
+        };
         const wallW = data.wall.width_mm * 0.001;
         const wallH = data.wall.height_mm * 0.001;
-        const wallD = 0.25; // 250mm visual wall depth
-
-        // Center origin of wall in 3D scene
+        const wallD = 0.2;
         const offsetX = -wallW / 2;
         const offsetY = -wallH / 2;
+        const size = Math.max(wallW, wallH);
+        this.makeGrid(offsetY, Math.ceil(size * 3));
+        const X = (mm) => mm * 0.001 + offsetX;
+        const Y = (mm) => mm * 0.001 + offsetY;
 
-        if (this.grid) {
-            this.grid.position.y = offsetY;
-        }
+        // The wall: a body, the front face with the photo on it, and its outline
+        const body = new THREE.Mesh(
+            new THREE.BoxGeometry(wallW, wallH, wallD),
+            new THREE.MeshLambertMaterial({ color: tone.panel, wireframe: this.wireframeMode })
+        );
+        body.position.set(0, 0, -wallD / 2);
+        this.wallGroup.add(body);
 
-        // 1. Base Wall Backing (Concrete/Masonry)
-        const wallGeom = new THREE.BoxGeometry(wallW, wallH, wallD);
-        const wallMat = new THREE.MeshStandardMaterial({
-            color: 0x142830,
-            roughness: 0.85,
-            metalness: 0.15,
-            wireframe: this.wireframeMode
-        });
-        const wallMesh = new THREE.Mesh(wallGeom, wallMat);
-        wallMesh.position.set(0, 0, -wallD / 2);
-        wallMesh.receiveShadow = true;
-        this.wallGroup.add(wallMesh);
+        const withPhoto = this.showPhoto && this.photoTexture;
+        const face = new THREE.Mesh(
+            new THREE.PlaneGeometry(wallW, wallH),
+            new THREE.MeshBasicMaterial(withPhoto
+                ? { map: this.photoTexture, color: 0xffffff, wireframe: this.wireframeMode }
+                : { color: tone.wall, wireframe: this.wireframeMode })
+        );
+        face.position.set(0, 0, 0.002);
+        this.wallGroup.add(face);
+        this.wallGroup.add(this.edges(wallW, wallH, tone.strong, 0, 0, 0.004));
 
-        // 2. Active Paintable Front Face (Highlighted in Cyan/Emerald)
-        const frontGeom = new THREE.PlaneGeometry(wallW, wallH);
-        const frontMat = new THREE.MeshStandardMaterial({
-            color: 0x1a454d,
-            emissive: 0x5ce1d2,
-            emissiveIntensity: 0.15,
-            roughness: 0.5,
-            metalness: 0.2,
-            side: THREE.DoubleSide
-        });
-        const frontMesh = new THREE.Mesh(frontGeom, frontMat);
-        frontMesh.position.set(0, 0, 0.002);
-        this.wallGroup.add(frontMesh);
-
-        // Outer Border Trim
-        const borderGeom = new THREE.EdgesGeometry(frontGeom);
-        const borderMat = new THREE.LineBasicMaterial({ color: 0x5ce1d2, linewidth: 2 });
-        const borderLines = new THREE.LineSegments(borderGeom, borderMat);
-        borderLines.position.set(0, 0, 0.004);
-        this.wallGroup.add(borderLines);
-
-        // 3. Obstacles (Windows, Doors, Electrical Boxes)
+        // Keep-outs: windows and doors are recesses, fixtures stand out from the wall
+        const labelH = Math.max(0.07, size * 0.022);
         data.obstacles.forEach((obs) => {
             const ow = obs.w * 0.001;
             const oh = obs.h * 0.001;
-            const ox = (obs.x * 0.001) + offsetX + (ow / 2);
-            const oy = (obs.y * 0.001) + offsetY + (oh / 2);
+            const ox = X(obs.x) + ow / 2;
+            const oy = Y(obs.y) + oh / 2;
+            const unsure = obs.type === 'unverified';
+            const edge = unsure ? tone.review : tone.keep;
+            const recess = obs.type === 'window' || obs.type === 'door';
+            const depth = recess ? Math.min(0.12, (obs.depth_mm || 80) * 0.001) : 0.05;
 
-            let obsDepth = (obs.depth_mm || 80.0) * 0.001;
-            let obsColor = 0xfa746e; // Red/Coral Keep-Out
-            let zPos = 0.01;
-
-            if (obs.type === 'window') {
-                // Recessed window glazing
-                const winGeom = new THREE.BoxGeometry(ow, oh, obsDepth);
-                const winMat = new THREE.MeshStandardMaterial({
-                    color: 0x0c2538,
-                    metalness: 0.9,
-                    roughness: 0.1,
-                    transparent: true,
-                    opacity: 0.85
-                });
-                const winMesh = new THREE.Mesh(winGeom, winMat);
-                winMesh.position.set(ox, oy, -obsDepth / 2);
-                this.obstacleGroup.add(winMesh);
-
-                // Frame outline
-                const frameGeom = new THREE.EdgesGeometry(new THREE.PlaneGeometry(ow, oh));
-                const frameMat = new THREE.LineBasicMaterial({ color: 0xfa746e, linewidth: 3 });
-                const frameLine = new THREE.LineSegments(frameGeom, frameMat);
-                frameLine.position.set(ox, oy, 0.008);
-                this.obstacleGroup.add(frameLine);
-
-            } else if (['switchboard', 'meter_panel', 'ac_unit', 'pipe', 'grill', 'unverified'].includes(obs.type)) {
-                // Extruded fixture: protrudes from the wall face (positive z), matching the
-                // obstacle contract's nonzero depth_mm for every one of these types -- none
-                // of them are a recess into the wall the way a window or door opening is.
-                const fixGeom = new THREE.BoxGeometry(ow, oh, 0.04);
-                const fixMat = new THREE.MeshStandardMaterial({
-                    color: 0xf4b860,
-                    metalness: 0.5,
-                    roughness: 0.4
-                });
-                const fixMesh = new THREE.Mesh(fixGeom, fixMat);
-                fixMesh.position.set(ox, oy, 0.02);
-                this.obstacleGroup.add(fixMesh);
-
-                const frameGeom = new THREE.EdgesGeometry(new THREE.PlaneGeometry(ow, oh));
-                const frameMat = new THREE.LineBasicMaterial({ color: 0xfa746e, linewidth: 2 });
-                const frameLine = new THREE.LineSegments(frameGeom, frameMat);
-                frameLine.position.set(ox, oy, 0.042);
-                this.obstacleGroup.add(frameLine);
-
-            } else {
-                // Door / General Opening
-                const doorGeom = new THREE.BoxGeometry(ow, oh, obsDepth * 0.5);
-                const doorMat = new THREE.MeshStandardMaterial({
-                    color: 0x221a22,
-                    metalness: 0.3,
-                    roughness: 0.7
-                });
-                const doorMesh = new THREE.Mesh(doorGeom, doorMat);
-                doorMesh.position.set(ox, oy, -obsDepth * 0.25);
-                this.obstacleGroup.add(doorMesh);
-
-                const frameGeom = new THREE.EdgesGeometry(new THREE.PlaneGeometry(ow, oh));
-                const frameMat = new THREE.LineBasicMaterial({ color: 0xfa746e, linewidth: 2 });
-                const frameLine = new THREE.LineSegments(frameGeom, frameMat);
-                frameLine.position.set(ox, oy, 0.008);
-                this.obstacleGroup.add(frameLine);
-            }
-        });
-
-        // 4. Rover Coverage Toolpath (3D Trajectory Ribbon)
-        const waypoints = data.waypoints || [];
-        this.simWaypoints = waypoints;
-
-        const pathPointsSpray = [];
-        const pathPointsTransit = [];
-
-        for (let i = 1; i < waypoints.length; i++) {
-            const p1 = waypoints[i - 1];
-            const p2 = waypoints[i];
-
-            const x1 = (p1.x * 0.001) + offsetX;
-            const y1 = (p1.y * 0.001) + offsetY;
-            const z1 = 0.04; // Slightly offset from wall face
-
-            const x2 = (p2.x * 0.001) + offsetX;
-            const y2 = (p2.y * 0.001) + offsetY;
-            const z2 = 0.04;
-
-            const isSpray = p1.spray_active && p2.spray_active && (p1.row === p2.row);
-
-            const lineGeom = new THREE.BufferGeometry().setFromPoints([
-                new THREE.Vector3(x1, y1, z1),
-                new THREE.Vector3(x2, y2, z2)
-            ]);
-
-            const lineMat = new THREE.LineBasicMaterial({
-                color: isSpray ? 0xf4b860 : 0xfa746e, // Golden for active spray, Coral/Magenta for transit
-                linewidth: isSpray ? 3 : 1,
-                transparent: true,
-                opacity: isSpray ? 0.95 : 0.45
-            });
-
-            const line = new THREE.Line(lineGeom, lineMat);
-            this.pathGroup.add(line);
-        }
-
-        // Add 3D Waypoint Nodes
-        const sphereGeom = new THREE.SphereGeometry(0.018, 8, 8);
-        const sprayNodeMat = new THREE.MeshBasicMaterial({ color: 0xf4b860 });
-        const transitNodeMat = new THREE.MeshBasicMaterial({ color: 0x5ce1d2 });
-
-        waypoints.forEach((wp, idx) => {
-            if (idx % 2 === 0 || idx === waypoints.length - 1) { // Sample nodes for visual cleanliness
-                const wx = (wp.x * 0.001) + offsetX;
-                const wy = (wp.y * 0.001) + offsetY;
-                const nodeMesh = new THREE.Mesh(sphereGeom, wp.spray_active ? sprayNodeMat : transitNodeMat);
-                nodeMesh.position.set(wx, wy, 0.04);
-                this.pathGroup.add(nodeMesh);
-            }
-        });
-
-        // Set rover marker to first waypoint
-        if (waypoints.length > 0 && this.roverMarker) {
-            const first = waypoints[0];
-            this.roverMarker.position.set(
-                (first.x * 0.001) + offsetX,
-                (first.y * 0.001) + offsetY,
-                0.08
+            const block = new THREE.Mesh(
+                new THREE.BoxGeometry(ow, oh, depth),
+                new THREE.MeshLambertMaterial({ color: edge, transparent: true, opacity: recess ? 0.18 : (unsure ? 0.22 : 0.4) })
             );
-            this.roverMarker.visible = true;
+            block.position.set(ox, oy, recess ? -depth / 2 + 0.003 : depth / 2);
+            this.obstacleGroup.add(block);
+            this.obstacleGroup.add(this.edges(ow, oh, edge, ox, oy, recess ? 0.008 : depth + 0.002, unsure));
+
+            const tag = this.label(obs.label, `${Math.round(obs.w)} × ${Math.round(obs.h)}`,
+                window.APRTheme.color(unsure ? 'review' : 'keep'), labelH);
+            tag.position.set(ox, Y(obs.y + obs.h) + labelH * 0.75, 0.1);
+            this.labelGroup.add(tag);
+        });
+
+        // The path: each spray pass as a band the width of the nozzle, moves with the spray off dashed
+        const waypoints = data.waypoints || [];
+        const sprayW = (data.wall.spray_width_mm || 250) * 0.001;
+        const bandMaterial = new THREE.MeshBasicMaterial({ color: tone.accent, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+        const centre = [];
+        const moves = [];
+        for (let i = 1; i < waypoints.length; i++) {
+            const a = waypoints[i - 1];
+            const b = waypoints[i];
+            const pair = [new THREE.Vector3(X(a.x), Y(a.y), 0.03), new THREE.Vector3(X(b.x), Y(b.y), 0.03)];
+            const spray = a.spray_active && b.spray_active && a.row === b.row;
+            (spray ? centre : moves).push(...pair);
+            if (spray) {
+                const horizontal = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
+                const length = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y)) * 0.001;
+                const band = new THREE.Mesh(
+                    new THREE.PlaneGeometry(horizontal ? length : sprayW, horizontal ? sprayW : length),
+                    bandMaterial
+                );
+                band.position.set((X(a.x) + X(b.x)) / 2, (Y(a.y) + Y(b.y)) / 2, 0.012);
+                this.pathGroup.add(band);
+            }
+        }
+        if (centre.length) {
+            this.pathGroup.add(new THREE.LineSegments(
+                new THREE.BufferGeometry().setFromPoints(centre),
+                new THREE.LineBasicMaterial({ color: tone.accent })
+            ));
+        }
+        if (moves.length) {
+            const transit = new THREE.LineSegments(
+                new THREE.BufferGeometry().setFromPoints(moves),
+                new THREE.LineDashedMaterial({ color: tone.muted, dashSize: 0.04, gapSize: 0.04 })
+            );
+            transit.computeLineDistances();
+            this.pathGroup.add(transit);
+        }
+        if (waypoints.length) {
+            const start = new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.025, size * 0.008), 16, 12), new THREE.MeshBasicMaterial({ color: tone.accent }));
+            start.position.set(X(waypoints[0].x), Y(waypoints[0].y), 0.04);
+            this.pathGroup.add(start);
         }
 
-        // Adjust camera distance nicely based on wall dimensions
-        const maxDim = Math.max(wallW, wallH);
-        this.camera.position.set(0, 0, maxDim * 1.5);
+        this.pathGroup.visible = this.showPath;
+        this.obstacleGroup.visible = this.showObstacles;
+        this.labelGroup.visible = this.showObstacles && this.showLabels;
+        if (!options.keepCamera) this.setIsometricView();
+    }
+
+    animate() {
+        requestAnimationFrame(this.animate);
+        if (this.controls) this.controls.update();
+        this.renderer.render(this.scene, this.camera);
+    }
+
+    lookFrom(x, y, z) {
+        this.camera.position.set(x, y, z);
         if (this.controls) {
             this.controls.target.set(0, 0, 0);
             this.controls.update();
         }
     }
 
-    animate() {
-        this.animationId = requestAnimationFrame(this.animate);
-
-        if (this.controls) {
-            this.controls.update();
-        }
-
-        // Animate rover nozzle along waypoints in simulation mode
-        if (this.isSimulating && this.simWaypoints.length > 1 && this.currentData) {
-            this.stepSimulation();
-        }
-
-        this.renderer.render(this.scene, this.camera);
-    }
-
-    stepSimulation() {
-        if (!this.roverMarker || this.simIndex >= this.simWaypoints.length - 1) {
-            this.isSimulating = false;
-            const btn = document.getElementById('simPlayBtn');
-            if (btn) btn.innerHTML = '▶ Simulate Sweep';
-            return;
-        }
-
-        const wallW = this.currentData.wall.width_mm * 0.001;
-        const wallH = this.currentData.wall.height_mm * 0.001;
-        const offsetX = -wallW / 2;
-        const offsetY = -wallH / 2;
-
-        const p1 = this.simWaypoints[this.simIndex];
-        const p2 = this.simWaypoints[this.simIndex + 1];
-
-        const targetX = (p2.x * 0.001) + offsetX;
-        const targetY = (p2.y * 0.001) + offsetY;
-
-        const currX = this.roverMarker.position.x;
-        const currY = this.roverMarker.position.y;
-
-        const dx = targetX - currX;
-        const dy = targetY - currY;
-        const dist = Math.hypot(dx, dy);
-
-        const step = 0.025 * this.simSpeed;
-
-        if (dist < step) {
-            this.roverMarker.position.set(targetX, targetY, 0.08);
-            this.simIndex++;
-        } else {
-            this.roverMarker.position.x += (dx / dist) * step;
-            this.roverMarker.position.y += (dy / dist) * step;
-        }
-    }
-
-    startSimulation() {
-        if (this.simWaypoints.length < 2) return;
-        this.isSimulating = true;
-        if (this.simIndex >= this.simWaypoints.length - 1) {
-            this.simIndex = 0;
-        }
-        if (this.roverMarker) this.roverMarker.visible = true;
-    }
-
-    stopSimulation() {
-        this.isSimulating = false;
-        this.simIndex = 0;
-    }
-
-    toggleSimulation() {
-        this.isSimulating = !this.isSimulating;
-        const btn = document.getElementById('simPlayBtn');
-        if (btn) {
-            btn.innerHTML = this.isSimulating ? '⏸ Pause' : '▶ Simulate Sweep';
-        }
+    wallSize() {
+        return Math.max(this.currentData.wall.width_mm, this.currentData.wall.height_mm) * 0.001;
     }
 
     resetView() {
         if (!this.currentData) return;
-        const wallW = this.currentData.wall.width_mm * 0.001;
-        const wallH = this.currentData.wall.height_mm * 0.001;
-        const maxDim = Math.max(wallW, wallH);
-
-        this.camera.position.set(0, 0, maxDim * 1.5);
-        if (this.controls) {
-            this.controls.target.set(0, 0, 0);
-            this.controls.update();
-        }
+        this.lookFrom(0, 0, this.wallSize() * 1.6);
     }
 
     setIsometricView() {
         if (!this.currentData) return;
-        const wallW = this.currentData.wall.width_mm * 0.001;
-        const wallH = this.currentData.wall.height_mm * 0.001;
-        const maxDim = Math.max(wallW, wallH);
-
-        this.camera.position.set(maxDim * 0.95, maxDim * 0.55, maxDim * 1.2);
-        if (this.controls) {
-            this.controls.target.set(0, 0, 0);
-            this.controls.update();
-        }
+        const size = this.wallSize();
+        this.lookFrom(size * 0.55, size * 0.22, size * 1.45);
     }
 
     setTopDownView() {
         if (!this.currentData) return;
-        const wallW = this.currentData.wall.width_mm * 0.001;
-        const wallH = this.currentData.wall.height_mm * 0.001;
-        const maxDim = Math.max(wallW, wallH, 3.0);
-
-        this.camera.position.set(0, maxDim * 1.6, 0.08);
-        if (this.controls) {
-            this.controls.target.set(0, 0, 0);
-            this.controls.update();
-        }
+        const size = Math.max(this.wallSize(), 3.0);
+        this.lookFrom(0, size * 1.6, 0.08);
     }
 
     toggleWireframe() {
         this.wireframeMode = !this.wireframeMode;
-        if (this.wallGroup) {
-            this.wallGroup.traverse((child) => {
-                if (child.material) {
-                    child.material.wireframe = this.wireframeMode;
-                }
-            });
-        }
+        this.wallGroup.traverse((child) => {
+            if (child.material && 'wireframe' in child.material) child.material.wireframe = this.wireframeMode;
+        });
+        return this.wireframeMode;
     }
 
     togglePath() {
         this.showPath = !this.showPath;
-        if (this.pathGroup) this.pathGroup.visible = this.showPath;
+        this.pathGroup.visible = this.showPath;
+        return this.showPath;
     }
 
     toggleObstacles() {
         this.showObstacles = !this.showObstacles;
-        if (this.obstacleGroup) this.obstacleGroup.visible = this.showObstacles;
+        this.obstacleGroup.visible = this.showObstacles;
+        this.labelGroup.visible = this.showObstacles && this.showLabels;
+        return this.showObstacles;
+    }
+
+    togglePhoto() {
+        this.showPhoto = !this.showPhoto;
+        if (this.currentData) this.loadWallData(this.currentData, { keepCamera: true });
+        return this.showPhoto;
+    }
+
+    toggleLabels() {
+        this.showLabels = !this.showLabels;
+        this.labelGroup.visible = this.showObstacles && this.showLabels;
+        return this.showLabels;
     }
 }
 
-// Global instance handle
 window.WallViewer3D = WallViewer3D;

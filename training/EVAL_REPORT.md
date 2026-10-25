@@ -1,6 +1,33 @@
-# Evaluation report: obstacle model v5
+# Evaluation report: obstacle model v6
 
-Model `models/apr_obstacles.onnx` (YOLO11n, 640 px). Measured with the app's own pipeline (`ObstacleDetector`, sensitivity 0.5, review threshold 0.25, accept threshold 0.50). A match needs IoU 0.5 and the same class. All real-photo numbers are on held-out photos the model never saw. Version 1 of this report is replaced: it described a model trained with two data bugs, listed below.
+Model `models/apr_obstacles.onnx` (YOLO11n, 640 px), version 6. Measured with the app's own pipeline (`ObstacleDetector`, sensitivity 0.5, review threshold 0.25, accept threshold 0.50). A match needs IoU 0.5 and the same class. All real-photo numbers are on held-out photos the model never saw.
+
+## Version 6: what changed and what it bought
+
+Version 6 is version 5 trained further (50 epochs) with one more source: the Door-and-Window Detection dataset (Sezen et al. 2022), 727 Google Street View photos of apartment facades with human door and window boxes. Its labels were drawn on sample photos and checked before training. About 180 of its training photos were left out by the rule that drops a photo when the teacher is unsure about an AC unit or a grill in it.
+
+Held-out photos by source, version 5 against version 6 (`training/eval_by_source.py`):
+
+| source (test photos) | class | ground truth | v5 recall / precision | v6 recall / precision |
+|---|---|---|---|---|
+| Street View apartments (68) | window | 735 | 0.56 / 0.84 | **0.85 / 0.84** |
+| Street View apartments (68) | door | 106 | 0.35 / 0.60 | **0.68 / 0.64** |
+| CMP Facade (46) | window | 1,410 | 0.86 / 0.92 | 0.88 / 0.91 |
+| CMP Facade (46) | door | 40 | 0.62 / 0.48 | 0.57 / 0.70 |
+| Open Images (195) | window | 1,900 | 0.41 / 0.65 | 0.41 / 0.64 |
+| Open Images (195) | door | 72 | 0.49 / 0.29 | 0.44 / 0.34 |
+| LVIS (41) | ac_unit | 100 | 0.28 / 0.54 | 0.32 / 0.52 |
+| ADE20K (14) | window | 26 | 0.23 / 0.13 | 0.08 / 0.12 |
+
+All 364 real test photos together (version 6): windows recall 0.65 / precision 0.79 (1,408 of 4,071 windows still get no box at all), doors 0.56 / 0.51, air conditioners 0.32 / 0.26 (precision over all photos is low because unlabelled ACs in the other sources count as false positives). Coverage against the classical fallback (any keep-out zone over half of a human box): model 0.71 of 4,400 boxes with 14% of each photo marked keep-out, classical 0.80 with 66%. On the 25 random synthetic walls: 187 of 187 obstacles found, no planned paint over any of them. ONNX matches the PyTorch weights (largest class score difference 0.00001).
+
+On the team's first 8 real photos: the false "pipe" on a roof edge from version 5 is gone and an AC unit at a photo's edge is now found; the wooden window is still called a door (still kept clear), the wall pipes are still missed, and one dark wooden window found by version 5 is now missed. meter_panel, pipe and grill still have no real-world number.
+
+Targets set before training (window and door recall 0.90, precision 0.85): still not met on any real source; closest are windows on Street View apartments (0.85 / 0.84) and frontal facades (0.88 / 0.91).
+
+The sections below describe version 5 and are kept for the history of the data bugs.
+
+# Version 5 (previous)
 
 ## Summary
 

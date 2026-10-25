@@ -72,6 +72,31 @@ class TestRoverUi(unittest.TestCase):
     def test_start_label_is_no_longer_hardcoded_to_the_origin(self):
         self.assertNotIn("START (0,0)", read("static", "app.js"))
 
+    def test_console_has_the_four_views_the_theme_switch_and_a_true_status_bar(self):
+        html = app_module.app.test_client().get("/").get_data(as_text=True)
+        for view in ("tabPlan", "tab3d", "tabSimulate", "tabExport", "panelPlan", "panel3d", "panelSimulate", "panelExport"):
+            self.assertIn(f'id="{view}"', html)
+        for element in ("themeToggle", "statusDetector", "statusSimulator", "layoutWhy", "logDrawer"):
+            self.assertIn(f'id="{element}"', html)
+        for removed in ("simModalOverlay", "confidenceBar", "simVacuumForce", "simTerminal", "tabTelemetry"):
+            self.assertNotIn(f'id="{removed}"', html)
+
+    def test_script_reads_what_the_app_can_do_and_follows_the_theme(self):
+        js = read("static", "app.js")
+        self.assertIn("fetch('/api/capabilities'", js)
+        self.assertIn("APRTheme.toggle()", js)
+        self.assertIn("addEventListener('apr-theme-change'", js)
+        self.assertIn("APRTheme.color", js)
+        self.assertIn("applyTheme", read("static", "viewer3d.js"))
+        self.assertIn("APRTheme", read("static", "rover_sim.js"))
+
+    def test_log_lines_and_server_text_are_inserted_as_text_never_as_markup(self):
+        for name in ("app.js", "rover_sim.js", "viewer3d.js"):
+            self.assertNotIn("innerHTML", read("static", name), name)
+        js = read("static", "app.js")
+        log = js[js.index("function appendLog("):js.index("function setLast(")]
+        self.assertIn("message.textContent = text;", log)
+
 
 if __name__ == "__main__":
     unittest.main()
