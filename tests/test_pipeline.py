@@ -174,7 +174,7 @@ class TestPaintPilotPipeline(unittest.TestCase):
         # 1. Index page
         res_idx = self.client.get("/")
         self.assertEqual(res_idx.status_code, 200)
-        self.assertIn(b"PAINTPILOT", res_idx.data)
+        self.assertIn(b"<title>APR Console</title>", res_idx.data)
 
         # 2. Benchmark samples endpoint
         res_samp = self.client.get("/api/samples")

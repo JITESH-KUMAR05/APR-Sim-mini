@@ -65,8 +65,8 @@ The console (`templates/index.html`, `static/style.css`, `static/app.js`) looks 
 | `--field` | #0e0f11 | #ffffff |
 | `--line` | #2a2c31 | #dcdbd6 |
 | `--text` | #e6e7ea | #1b1c1e |
-| `--muted` | #8a8d94 | #6c6e73 |
-| `--accent` (paint, primary button, active tab only) | #e8a33d | #b8650a |
+| `--muted` | #8a8d94 | #626469 |
+| `--accent` (paint, primary button, active tab only) | #e8a33d | #a65a08 |
 | `--keep` (keep-out) | #e25c50 | #c23b2f |
 | `--review` (needs review) | #d9b45a | #a15c00 |
 | `--ok` (model loaded dot only) | #6cbf7b | #2f8f46 |

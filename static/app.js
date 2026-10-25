@@ -1,36 +1,21 @@
 /**
- * PaintPilot - Automated Painting Rover (APR) Web Console Controller
- * Coordinates OpenCV segmentation, 3D WebGL digital twin, 2D geometry map, and CAD exports.
- * Traced to MSME Grant INC25ETS084848 / WBS 1.2 §3.
+ * APR Console controller: wall settings, the dimensioned wall plan, the 3D view, the sweep preview,
+ * the rover simulator replay and the exports. Colours come from the theme tokens (static/theme.js).
  */
 
 document.addEventListener('DOMContentLoaded', () => {
-    // DOM Elements
     const $ = (id) => document.getElementById(id);
+    const color = (name) => window.APRTheme.color(name);
 
+    // Source and settings
     const fileInput = $('fileInput');
     const dropZone = $('dropZone');
     const fileNameDisplay = $('fileName');
     const generateBtn = $('generate');
-    const logContainer = $('log');
-
-    // Preset sample buttons
+    const planError = $('planError');
     const sampleResidentialBtn = $('sampleResidential');
     const sampleCommercialBtn = $('sampleCommercial');
-
-    // View tabs
-    const tab3dBtn = $('tab3d');
-    const tab2dBtn = $('tab2d');
-    const tabTelemetryBtn = $('tabTelemetry');
-    const viewport3d = $('viewport3d');
-    const viewport2d = $('viewport2d');
-    const telemetryView = $('telemetryView');
-
-    // 2D Canvas
-    const canvas2d = $('canvas2d');
-    const ctx2d = canvas2d.getContext('2d');
-
-    // Parameter inputs
+    const randomWallBtn = $('randomWallBtn');
     const widthInput = $('width');
     const heightInput = $('height');
     const sprayInput = $('sprayWidth');
@@ -39,35 +24,52 @@ document.addEventListener('DOMContentLoaded', () => {
     const sensitivityInput = $('sensitivity');
     const startCornerInput = $('startCorner');
     const directionInput = $('stripeDirection');
+    const keepCorrectionsInput = $('keepCorrections');
+
+    // Views
+    const TABS = [
+        { name: 'plan', tab: $('tabPlan'), panel: $('panelPlan') },
+        { name: '3d', tab: $('tab3d'), panel: $('panel3d') },
+        { name: 'simulate', tab: $('tabSimulate'), panel: $('panelSimulate') },
+        { name: 'export', tab: $('tabExport'), panel: $('panelExport') }
+    ];
+    const viewport2d = $('viewport2d');
+    const canvas2d = $('canvas2d');
+    const ctx2d = canvas2d.getContext('2d');
+    const layoutWhy = $('layoutWhy');
     const layoutAdvice = $('layoutAdvice');
     const simRoverBtn = $('simRoverBtn');
-    const keepCorrectionsInput = $('keepCorrections');
     const simReport = $('simReport');
+    const simUnavailable = $('simUnavailable');
+    const exportCaution = $('exportCaution');
+    const exportButtons = document.querySelectorAll('[data-export]');
 
-    // Value display spans
-    const widthVal = $('widthValue');
-    const heightVal = $('heightValue');
-    const sprayVal = $('sprayValue');
-    const overlapVal = $('overlapValue');
-    const bufferVal = $('bufferValue');
-    const sensitivityVal = $('sensitivityValue');
-
-    // Metric elements
+    // Inspector
+    const inspector = $('inspector');
+    const propsPanel = $('propsPanel');
+    const scrim = $('scrim');
     const layoutValue = $('layoutValue');
     const cellsValue = $('cellsValue');
     const areaValue = $('areaValue');
     const distanceValue = $('distanceValue');
     const paintVolValue = $('paintVolValue');
     const cycleTimeValue = $('cycleTimeValue');
-    const throughputValue = $('throughputValue');
-    const confidenceValue = $('confidenceValue');
-    const confidenceBar = $('confidenceBar');
     const activeObstacleCount = $('activeObstacleCount');
+    const obstacleList = $('obstacleList');
     const detectorBanner = $('detectorBanner');
     const reviewPanel = $('reviewPanel');
     const reviewCount = $('reviewCount');
     const reviewList = $('reviewList');
-    const exportCaution = $('exportCaution');
+
+    // Status bar and activity
+    const statusDetector = $('statusDetector');
+    const statusSimulator = $('statusSimulator');
+    const statusWall = $('statusWall');
+    const statusLayout = $('statusLayout');
+    const statusLast = $('statusLast');
+    const logToggle = $('logToggle');
+    const logDrawer = $('logDrawer');
+    const logContainer = $('log');
 
     // Wall corner picker
     const cornersRow = $('cornersRow');
@@ -81,15 +83,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const cornerCancelBtn = $('cornerCancelBtn');
     const cornerApplyBtn = $('cornerApplyBtn');
 
-    // Overlay 3D Controls
-    const resetViewBtn = $('resetViewBtn');
-    const isoViewBtn = $('isoViewBtn');
-    const topDownViewBtn = $('topDownViewBtn');
-    const wireframeBtn = $('wireframeBtn');
-    const togglePathBtn = $('togglePathBtn');
-    const toggleObstaclesBtn = $('toggleObstaclesBtn');
-    const simPlayBtn = $('simPlayBtn');
-
     // State
     let viewer3D = null;
     let roverSim = null;
@@ -102,65 +95,238 @@ document.addEventListener('DOMContentLoaded', () => {
     let replanInFlight = false;
     let simResult = null; // the last rover simulator replay; cleared whenever the plan changes
     let simGeneration = 0; // bumped whenever the plan changes, so a replay that was still running is dropped
+    let activeTab = 'plan';
+    let planView = null; // zoom and pan of the wall plan; null means fit to the panel
+    let planGeom = null; // where the wall was last drawn, for zoom, pan and hover
+    let highlightId = null;
+    const layers = { photo: true, stripes: true, transit: true, keepouts: true };
 
-    // Initialize 3D Viewer
-    try {
-        if (window.THREE && window.WallViewer3D) {
-            viewer3D = new window.WallViewer3D('viewport3d');
-            appendLog('3D WebGL engine initialized with OrbitControls', 'info');
-        } else {
-            appendLog('Warning: 3D engine script loading...', 'warn');
+    const CLASS_OPTIONS = [
+        ['window', 'Window'],
+        ['door', 'Door'],
+        ['ac_unit', 'AC unit'],
+        ['meter_panel', 'Meter panel'],
+        ['pipe', 'Pipe'],
+        ['grill', 'Grill']
+    ];
+
+    const CORNER_NAMES = {
+        bottom_left: 'bottom left',
+        bottom_right: 'bottom right',
+        top_left: 'top left',
+        top_right: 'top right'
+    };
+
+    // ----- Activity log -----
+
+    function appendLog(text, kind = 'info') {
+        const item = document.createElement('li');
+        item.className = kind;
+        const time = document.createElement('time');
+        time.textContent = new Date().toTimeString().slice(0, 8);
+        const message = document.createElement('span');
+        message.textContent = text;
+        item.append(time, message);
+        logContainer.appendChild(item);
+        logContainer.scrollTop = logContainer.scrollHeight;
+        if (kind === 'warn' || kind === 'error') {
+            statusLast.textContent = text;
+            logToggle.classList.add('error');
         }
+    }
+
+    function setLast(text) {
+        statusLast.textContent = text;
+        logToggle.classList.remove('error');
+    }
+
+    function setLogOpen(open) {
+        logDrawer.hidden = !open;
+        logToggle.setAttribute('aria-expanded', String(open));
+        if (open) logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    logToggle.addEventListener('click', () => setLogOpen(logDrawer.hidden));
+    $('logClose').addEventListener('click', () => setLogOpen(false));
+
+    // ----- Engines -----
+
+    try {
+        if (window.THREE && window.WallViewer3D) viewer3D = new window.WallViewer3D('viewport3d');
+        else appendLog('The 3D view could not load; the plan and exports still work', 'warn');
     } catch (e) {
         console.error('Error initializing 3D viewer:', e);
-        appendLog('3D engine fallback enabled', 'warn');
+        appendLog('The 3D view could not start; the plan and exports still work', 'warn');
     }
 
-    // Initialize Autonomous Rover Simulation Engine
     try {
-        if (window.RoverSimulation) {
-            roverSim = new window.RoverSimulation('simCanvas');
-            appendLog('Autonomous Rover Simulation SITL engine ready', 'info');
-        }
+        if (window.RoverSimulation) roverSim = new window.RoverSimulation('simCanvas');
     } catch (e) {
-        console.error('Error initializing RoverSimulation:', e);
+        console.error('Error initializing the sweep preview:', e);
     }
 
-    // Bind slider labels
-    widthInput.addEventListener('input', () => { widthVal.textContent = widthInput.value; });
-    heightInput.addEventListener('input', () => { heightVal.textContent = heightInput.value; });
-    sprayInput.addEventListener('input', () => { sprayVal.textContent = sprayInput.value; });
-    overlapInput.addEventListener('input', () => { overlapVal.textContent = overlapInput.value; });
-    bufferInput.addEventListener('input', () => { bufferVal.textContent = bufferInput.value; });
-    sensitivityInput.addEventListener('input', () => { sensitivityVal.textContent = Number(sensitivityInput.value).toFixed(2); });
+    // ----- What this app can do -----
 
-    // Preset buttons
-    sampleResidentialBtn.addEventListener('click', () => {
-        selectedFile = null;
-        activeSampleId = 'residential';
-        resetCorners(false);
-        fileNameDisplay.textContent = 'Benchmark: Residential Exterior Facade';
-        sampleResidentialBtn.classList.add('active');
-        sampleCommercialBtn.classList.remove('active');
-        widthInput.value = 4000; widthVal.textContent = '4000';
-        heightInput.value = 2800; heightVal.textContent = '2800';
-        runAnalysis();
+    function setDetectorStatus(detector) {
+        const trained = detector === 'yolo11n-onnx';
+        const dot = document.createElement('span');
+        dot.className = trained ? 'dot ok' : 'dot warn';
+        dot.setAttribute('aria-hidden', 'true');
+        statusDetector.replaceChildren(dot, trained ? 'Detector: trained model' : 'Detector: basic edge detection');
+        statusDetector.title = trained
+            ? 'Obstacles are found by the trained YOLO11n model'
+            : 'The trained model is not loaded. Basic edge detection is less reliable on real walls.';
+    }
+
+    function setSimulatorStatus(available) {
+        statusSimulator.textContent = available ? 'Physics replay: available' : 'Physics replay: local app only';
+        simUnavailable.hidden = available;
+        simRoverBtn.disabled = !available;
+    }
+
+    fetch('/api/capabilities')
+        .then((res) => res.json())
+        .then((caps) => {
+            setDetectorStatus(caps.detector);
+            setSimulatorStatus(Boolean(caps.simulator));
+        })
+        .catch(() => {
+            statusDetector.textContent = 'Detector: unknown';
+            statusSimulator.textContent = 'Physics replay: unknown';
+        });
+
+    // ----- Theme -----
+
+    function updateThemeLabel() {
+        const next = window.APRTheme.get() === 'dark' ? 'light' : 'dark';
+        $('themeToggle').setAttribute('aria-label', `Switch to ${next} theme`);
+        $('themeToggle').title = `Switch to ${next} theme`;
+    }
+
+    $('themeToggle').addEventListener('click', () => window.APRTheme.toggle());
+    document.addEventListener('apr-theme-change', () => {
+        updateThemeLabel();
+        render2DCanvas();
+        if (viewer3D && viewer3D.applyTheme) viewer3D.applyTheme();
+        if (roverSim) roverSim.render();
+    });
+    updateThemeLabel();
+
+    // ----- Tabs -----
+
+    function switchTab(name) {
+        activeTab = name;
+        TABS.forEach((entry) => {
+            const selected = entry.name === name;
+            entry.tab.setAttribute('aria-selected', String(selected));
+            entry.tab.tabIndex = selected ? 0 : -1;
+            entry.panel.hidden = !selected;
+        });
+        if (name === 'plan') render2DCanvas();
+        if (name === '3d' && viewer3D) viewer3D.onResize();
+        if (name === 'simulate' && roverSim) {
+            roverSim.resize();
+            roverSim.render();
+        }
+        if (name !== 'plan') setAdviceOpen(false);
+    }
+
+    TABS.forEach((entry, index) => {
+        entry.tab.addEventListener('click', () => switchTab(entry.name));
+        entry.tab.addEventListener('keydown', (e) => {
+            let next = null;
+            if (e.key === 'ArrowRight') next = (index + 1) % TABS.length;
+            if (e.key === 'ArrowLeft') next = (index - 1 + TABS.length) % TABS.length;
+            if (e.key === 'Home') next = 0;
+            if (e.key === 'End') next = TABS.length - 1;
+            if (next === null) return;
+            e.preventDefault();
+            switchTab(TABS[next].name);
+            TABS[next].tab.focus();
+        });
     });
 
-    sampleCommercialBtn.addEventListener('click', () => {
+    // ----- 3D view controls -----
+
+    $('resetViewBtn').addEventListener('click', () => viewer3D && viewer3D.resetView());
+    $('isoViewBtn').addEventListener('click', () => viewer3D && viewer3D.setIsometricView());
+    $('topDownViewBtn').addEventListener('click', () => viewer3D && viewer3D.setTopDownView());
+    [['wireframeBtn', 'toggleWireframe'], ['togglePathBtn', 'togglePath'], ['toggleObstaclesBtn', 'toggleObstacles']].forEach(([id, method]) => {
+        const btn = $(id);
+        btn.addEventListener('click', () => {
+            if (!viewer3D) return;
+            const on = viewer3D[method]();
+            btn.classList.toggle('on', on);
+            btn.setAttribute('aria-pressed', String(on));
+        });
+    });
+
+    // ----- Drawers on narrow screens -----
+
+    function closeDrawers() {
+        propsPanel.classList.remove('open');
+        inspector.classList.remove('open');
+        scrim.hidden = true;
+    }
+
+    function openDrawer(panel) {
+        const wasOpen = panel.classList.contains('open');
+        closeDrawers();
+        if (wasOpen) return;
+        panel.classList.add('open');
+        scrim.hidden = false;
+    }
+
+    $('openProps').addEventListener('click', () => openDrawer(propsPanel));
+    $('openInspector').addEventListener('click', () => openDrawer(inspector));
+    scrim.addEventListener('click', closeDrawers);
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (cornerModal.style.display !== 'none') { closeCornerModal(); return; }
+        if (!layoutAdvice.hidden) { setAdviceOpen(false); return; }
+        if (!logDrawer.hidden) { setLogOpen(false); return; }
+        closeDrawers();
+    });
+
+    // ----- Settings -----
+
+    const sliderOutputs = [
+        [sprayInput, $('sprayValue'), (v) => `${v} mm`],
+        [overlapInput, $('overlapValue'), (v) => `${v} %`],
+        [bufferInput, $('bufferValue'), (v) => `${v} mm`],
+        [sensitivityInput, $('sensitivityValue'), (v) => Number(v).toFixed(2)]
+    ];
+    sliderOutputs.forEach(([input, output, format]) => {
+        const update = () => { output.textContent = format(input.value); };
+        input.addEventListener('input', update);
+        update();
+    });
+
+    function chooseSample(id, button, label, width, height) {
         selectedFile = null;
-        activeSampleId = 'commercial';
+        activeSampleId = id;
         resetCorners(false);
-        fileNameDisplay.textContent = 'Benchmark: Commercial Building Wall';
-        sampleCommercialBtn.classList.add('active');
+        fileNameDisplay.textContent = label;
+        [sampleResidentialBtn, sampleCommercialBtn].forEach((b) => b.classList.toggle('active', b === button));
+        widthInput.value = width;
+        heightInput.value = height;
+        runAnalysis();
+    }
+
+    sampleResidentialBtn.addEventListener('click', () => chooseSample('residential', sampleResidentialBtn, 'Sample: residential facade', 4000, 2800));
+    sampleCommercialBtn.addEventListener('click', () => chooseSample('commercial', sampleCommercialBtn, 'Sample: commercial wall', 4500, 3000));
+
+    function useFile(file, label) {
+        selectedFile = file;
+        activeSampleId = null;
+        resetCorners(true);
         sampleResidentialBtn.classList.remove('active');
-        widthInput.value = 4500; widthVal.textContent = '4500';
-        heightInput.value = 3000; heightVal.textContent = '3000';
-        runAnalysis();
-    });
+        sampleCommercialBtn.classList.remove('active');
+        fileNameDisplay.textContent = label;
+    }
 
     // Random wall: the server draws a wall with known obstacles, then it goes through the normal upload path
-    const randomWallBtn = $('randomWallBtn');
     randomWallBtn.addEventListener('click', () => {
         randomWallBtn.disabled = true;
         fetch('/api/random_wall', {
@@ -174,104 +340,50 @@ document.addEventListener('DOMContentLoaded', () => {
             return fetch(wall.image_data_url).then((res) => res.blob()).then((blob) => ({ wall, blob }));
         })
         .then(({ wall, blob }) => {
-            selectedFile = new File([blob], `random_wall_${wall.seed}.jpg`, { type: 'image/jpeg' });
-            activeSampleId = null;
-            resetCorners(true);
-            sampleResidentialBtn.classList.remove('active');
-            sampleCommercialBtn.classList.remove('active');
-            widthInput.value = wall.width_mm; widthVal.textContent = String(wall.width_mm);
-            heightInput.value = wall.height_mm; heightVal.textContent = String(wall.height_mm);
-            fileNameDisplay.textContent = `Random wall #${wall.seed}`;
+            useFile(new File([blob], `random_wall_${wall.seed}.jpg`, { type: 'image/jpeg' }), `Random wall #${wall.seed}`);
+            widthInput.value = wall.width_mm;
+            heightInput.value = wall.height_mm;
             const planted = Object.entries(wall.planted).filter(([, n]) => n > 0).map(([name, n]) => `${n} ${name}`).join(', ');
-            appendLog(`Random wall #${wall.seed}, ${wall.width_mm} x ${wall.height_mm} mm. Hidden in it: ${planted || 'nothing'}`, 'info');
+            appendLog(`Random wall #${wall.seed}, ${wall.width_mm} × ${wall.height_mm} mm. Hidden in it: ${planted || 'nothing'}`);
             return runAnalysis(); // the button stays off until the analysis is done, so two walls cannot race
         })
         .catch((err) => {
-            appendLog(`Random wall error: ${String(err.message).replace(/[<>&]/g, ' ')}`, 'warn');
+            appendLog(`Random wall: ${err.message}`, 'error');
         })
         .finally(() => {
             randomWallBtn.disabled = false;
         });
     });
 
-    // File Upload handling
     dropZone.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files && e.target.files[0]) {
-            selectedFile = e.target.files[0];
-            activeSampleId = null;
-            resetCorners(true);
-            sampleResidentialBtn.classList.remove('active');
-            sampleCommercialBtn.classList.remove('active');
-            fileNameDisplay.textContent = selectedFile.name + ` (${(selectedFile.size / 1024).toFixed(0)} KB)`;
-            appendLog(`Loaded custom image: ${selectedFile.name}`, 'info');
-            runAnalysis();
-        }
+    dropZone.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
     });
-
-    // Drag and Drop
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        useFile(file, `${file.name} (${(file.size / 1024).toFixed(0)} KB)`);
+        appendLog(`Photo loaded: ${file.name}`);
+        runAnalysis();
+    });
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
-        dropZone.style.borderColor = 'var(--cyan)';
+        dropZone.classList.add('dragover');
     });
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.style.borderColor = '#34636b';
-    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
-        dropZone.style.borderColor = '#34636b';
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            selectedFile = e.dataTransfer.files[0];
-            activeSampleId = null;
-            resetCorners(true);
-            sampleResidentialBtn.classList.remove('active');
-            sampleCommercialBtn.classList.remove('active');
-            fileNameDisplay.textContent = selectedFile.name;
-            runAnalysis();
-        }
+        dropZone.classList.remove('dragover');
+        const file = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!file) return;
+        useFile(file, file.name);
+        appendLog(`Photo loaded: ${file.name}`);
+        runAnalysis();
     });
 
-    // View Tabs Switching
-    tab3dBtn.addEventListener('click', () => switchTab('3d'));
-    tab2dBtn.addEventListener('click', () => switchTab('2d'));
-    tabTelemetryBtn.addEventListener('click', () => switchTab('telemetry'));
-
-    function switchTab(tab) {
-        tab3dBtn.classList.remove('active');
-        tab2dBtn.classList.remove('active');
-        tabTelemetryBtn.classList.remove('active');
-
-        viewport3d.style.display = 'none';
-        viewport2d.style.display = 'none';
-        telemetryView.style.display = 'none';
-
-        if (tab === '3d') {
-            tab3dBtn.classList.add('active');
-            viewport3d.style.display = 'block';
-            if (viewer3D) viewer3D.onResize();
-        } else if (tab === '2d') {
-            tab2dBtn.classList.add('active');
-            viewport2d.style.display = 'block';
-            render2DCanvas();
-        } else if (tab === 'telemetry') {
-            tabTelemetryBtn.classList.add('active');
-            telemetryView.style.display = 'block';
-        }
-    }
-
-    // 3D Controls
-    if (resetViewBtn) resetViewBtn.addEventListener('click', () => viewer3D && viewer3D.resetView());
-    if (isoViewBtn) isoViewBtn.addEventListener('click', () => viewer3D && viewer3D.setIsometricView());
-    if (topDownViewBtn) topDownViewBtn.addEventListener('click', () => viewer3D && viewer3D.setTopDownView());
-    if (wireframeBtn) wireframeBtn.addEventListener('click', () => viewer3D && viewer3D.toggleWireframe());
-    if (togglePathBtn) togglePathBtn.addEventListener('click', () => viewer3D && viewer3D.togglePath());
-    if (toggleObstaclesBtn) toggleObstaclesBtn.addEventListener('click', () => viewer3D && viewer3D.toggleObstacles());
-    if (simPlayBtn) simPlayBtn.addEventListener('click', () => viewer3D && viewer3D.toggleSimulation());
-
-    // Generate Button
     generateBtn.addEventListener('click', runAnalysis);
 
-    // Changing the start corner after Generate re-plans so the exports match the dropdown
+    // Changing the start corner after a plan exists re-plans so the exports match the dropdown
     startCornerInput.addEventListener('change', () => {
         if (!currentData) return;
         if (replanInFlight) {
@@ -281,105 +393,14 @@ document.addEventListener('DOMContentLoaded', () => {
         replan(currentData.obstacles, startCornerInput.value);
     });
 
-    // Changing the stripe direction after Generate re-plans in the same way
+    // Changing the stripe direction after a plan exists re-plans in the same way
     directionInput.addEventListener('change', () => {
         if (!currentData || replanInFlight) return;
         replan(currentData.obstacles, startCornerInput.value);
     });
 
-    // Export buttons
-    document.querySelectorAll('[data-export]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            const format = btn.dataset.export;
-            downloadExport(format);
-        });
-    });
+    // ----- Wall corner picker -----
 
-    function downloadExport(format) {
-        appendLog(`Initiating download for ${format.toUpperCase()} export...`, 'info');
-        const url = `/api/download/${format}`;
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = '';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-    }
-
-    // Autonomous Simulation Modal Controls
-    const simModalOverlay = $('simModalOverlay');
-    const openSimBtn = $('openSimBtn');
-    const closeSimBtn = $('closeSimBtn');
-    const simStartBtn = $('simStartBtn');
-    const simPauseBtn = $('simPauseBtn');
-    const simResetBtn = $('simResetBtn');
-
-    if (openSimBtn) {
-        openSimBtn.addEventListener('click', () => {
-            if (!currentData) {
-                appendLog('Notice: Generating wall data before launching simulation...', 'info');
-                runAnalysis();
-            }
-            if (simModalOverlay) {
-                simModalOverlay.style.display = 'flex';
-                if (roverSim && currentData) {
-                    roverSim.init(currentData);
-                    if (loadedImage2D && loadedImage2D.complete) {
-                        roverSim.sourceImage = loadedImage2D;
-                    }
-                    roverSim.resize();
-                    roverSim.render();
-                }
-            }
-        });
-    }
-
-    if (closeSimBtn) {
-        closeSimBtn.addEventListener('click', () => {
-            if (roverSim) roverSim.stop();
-            if (simModalOverlay) simModalOverlay.style.display = 'none';
-        });
-    }
-
-    if (simStartBtn) {
-        simStartBtn.addEventListener('click', () => {
-            if (roverSim) roverSim.start();
-        });
-    }
-
-    if (simPauseBtn) {
-        simPauseBtn.addEventListener('click', () => {
-            if (roverSim) roverSim.pause();
-        });
-    }
-
-    if (simResetBtn) {
-        simResetBtn.addEventListener('click', () => {
-            if (roverSim) roverSim.reset();
-        });
-    }
-
-    // Speed buttons
-    document.querySelectorAll('.sim-speed-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.sim-speed-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const speed = Number(btn.dataset.speed) || 1.0;
-            if (roverSim) roverSim.setSpeed(speed);
-        });
-    });
-
-    // View mode buttons
-    document.querySelectorAll('.sim-mode-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.sim-mode-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const mode = btn.dataset.mode || 'hybrid';
-            if (roverSim) roverSim.setViewMode(mode);
-        });
-    });
-
-    // Wall corner picker
     const CORNER_PROMPTS = [
         "Click the wall's top-left corner.",
         'Click the top-right corner.',
@@ -388,19 +409,12 @@ document.addEventListener('DOMContentLoaded', () => {
         'All four corners set. Apply to straighten the photo.'
     ];
 
-    // Guarded the same way the 3D viewer is initialized above: a load failure here must
-    // not throw out of the top-level script body and break the const declarations (like
-    // CLASS_OPTIONS) that run later in this same file.
     let cornerPicker = null;
     try {
-        if (window.CornerPicker) {
-            cornerPicker = new window.CornerPicker(cornerCanvas, updateCornerHint);
-        } else {
-            appendLog('Warning: corner picker script loading...', 'warn');
-        }
+        if (window.CornerPicker) cornerPicker = new window.CornerPicker(cornerCanvas, updateCornerHint);
     } catch (e) {
         console.error('Error initializing CornerPicker:', e);
-        appendLog('Corner picker fallback enabled', 'warn');
+        appendLog('The corner picker could not start; the whole photo is used as the wall', 'warn');
     }
 
     function updateCornerHint() {
@@ -413,7 +427,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateCornersStatus() {
         cornersStatus.textContent = wallCorners
             ? 'Wall corners set. The photo is straightened before detection.'
-            : 'Whole photo is treated as the wall.';
+            : 'The whole photo is treated as the wall.';
     }
 
     function resetCorners(hasUpload) {
@@ -452,13 +466,17 @@ document.addEventListener('DOMContentLoaded', () => {
         closeCornerModal();
         runAnalysis();
     });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && cornerModal.style.display !== 'none') closeCornerModal();
-    });
 
-    // Core Analysis Execution
+    // ----- Plan the wall -----
+
+    function showPlanError(text) {
+        planError.textContent = text;
+        planError.hidden = !text;
+    }
+
     function runAnalysis() {
-        appendLog('Starting obstacle detection & CAD toolpath generation...', 'info');
+        appendLog('Planning: finding obstacles and laying out the stripes');
+        showPlanError('');
 
         const formData = new FormData();
         formData.append('width_mm', widthInput.value);
@@ -478,296 +496,69 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         generateBtn.disabled = true;
-        generateBtn.textContent = 'Processing Geometry...';
+        generateBtn.textContent = 'Planning…';
 
-        return fetch('/api/analyze', {
-            method: 'POST',
-            body: formData
-        })
-        .then((res) => {
-            if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-            return res.json();
-        })
-        .then((data) => {
+        return fetch('/api/analyze', { method: 'POST', body: formData })
+        .then((res) => res.json().catch(() => ({})).then((body) => ({ res, body })))
+        .then(({ res, body: data }) => {
             generateBtn.disabled = false;
-            generateBtn.innerHTML = 'Generate Wall Map & CAD &nbsp;→';
+            generateBtn.textContent = 'Plan wall';
 
-            if (!data.success) {
-                appendLog(`Error: ${data.error}`, 'warn');
-                // Self-heal: if the server rejected the request (e.g. bad corners), don't
-                // keep sending the same broken corners on every retry -- fall back to
-                // "whole photo" until the operator re-marks them.
+            if (!res.ok || !data.success) {
+                const reason = data.error || `The server answered ${res.status}`;
+                appendLog(`Plan failed: ${reason}`, 'error');
+                showPlanError(`${reason}. Check the settings and try again.`);
+                // A rejected request (for example bad corners) must not keep sending the same corners
                 wallCorners = null;
                 updateCornersStatus();
                 return;
             }
 
             currentData = data;
+            planView = null;
             clearSimResult();
             refreshViews(data);
             showLayout(data.layout);
 
-            // Pre-load image for 2D Canvas
+            loadedImage2D = null;
             if (data.image_data_url) {
-                loadedImage2D = new Image();
-                window.loadedImage2D = loadedImage2D;
-                loadedImage2D.onload = () => {
+                const image = new Image();
+                image.onload = () => {
+                    if (currentData !== data) return;
+                    loadedImage2D = image;
                     render2DCanvas();
                     if (roverSim) {
-                        roverSim.sourceImage = loadedImage2D;
+                        roverSim.sourceImage = image;
                         roverSim.render();
                     }
                 };
-                loadedImage2D.src = data.image_data_url;
-            } else {
-                render2DCanvas();
+                image.src = data.image_data_url;
             }
+            render2DCanvas();
 
-            const reviewNote = data.needs_review ? `, ${data.needs_review} need review` : '';
-            appendLog(`Model generated: ${data.obstacles.length} keep-out zones detected${reviewNote}, ${data.waypoints.length} waypoints planned`, 'success');
-            appendLog(`AutoCAD DXF & Wavefront 3D OBJ ready for export (DFT: ${data.metrics.target_dft_um} µm)`, 'info');
+            const reviewNote = data.needs_review ? `, ${data.needs_review} to check` : '';
+            appendLog(`Planned: ${data.obstacles.length} keep-outs${reviewNote}, ${data.stats.num_rows} stripes, ${data.waypoints.length} waypoints`, 'success');
+            markPlanned(data);
         })
         .catch((err) => {
             generateBtn.disabled = false;
-            generateBtn.innerHTML = 'Generate Wall Map & CAD &nbsp;→';
+            generateBtn.textContent = 'Plan wall';
             console.error('Analysis error:', err);
-            appendLog(`Execution error: ${err.message}`, 'warn');
-            // Self-heal: a rejected request (e.g. the server rejected the marked corners,
-            // which surfaces here as a non-OK HTTP status) must not leave wallCorners set,
-            // or every subsequent attempt keeps failing the same way.
+            appendLog(`Plan failed: ${err.message}`, 'error');
+            showPlanError('The server could not be reached. Check that the app is running and try again.');
             wallCorners = null;
             updateCornersStatus();
         });
     }
 
-    function updateMetrics(data) {
-        const { wall, obstacles, stats, metrics, confidence } = data;
-
-        layoutValue.textContent = `${stats.num_rows} passes`;
-        cellsValue.textContent = stats.waypoint_count.toLocaleString();
-        areaValue.textContent = `${metrics.net_paintable_area_m2} m²`;
-        distanceValue.textContent = `${stats.total_distance_m} m`;
-
-        if (paintVolValue) paintVolValue.textContent = `${metrics.paint_volume_liters} L`;
-        if (cycleTimeValue) cycleTimeValue.textContent = metrics.cycle_time_formatted;
-        if (throughputValue) throughputValue.textContent = `${metrics.throughput_m2_per_hr} m²/h`;
-
-        const hasConfidence = confidence !== null && confidence !== undefined;
-        confidenceValue.textContent = hasConfidence ? `${confidence}%` : 'n/a';
-        confidenceBar.style.width = hasConfidence ? `${Math.min(100, Math.max(10, confidence))}%` : '0%';
-
-        if (activeObstacleCount) {
-            activeObstacleCount.textContent = `${obstacles.length} zones`;
-        }
-
-        $('statusWallBoundary').textContent = `${wall.width_mm} × ${wall.height_mm} mm`;
-        $('statusSprayDist').textContent = `${stats.spray_distance_m} m (Active)`;
-    }
-
-    function updateTelemetry(data) {
-        const tbody = document.getElementById('telemetryBody');
-        if (!tbody) return;
-
-        tbody.innerHTML = '';
-        const waypoints = data.waypoints || [];
-
-        // Show up to 120 sample waypoints in telemetry view
-        const sampleRate = Math.max(1, Math.floor(waypoints.length / 120));
-        waypoints.forEach((wp, idx) => {
-            if (idx % sampleRate !== 0 && idx !== waypoints.length - 1) return;
-
-            const tr = document.createElement('tr');
-            const sprayClass = wp.spray_active ? 'badge-spray-on' : 'badge-spray-off';
-            const sprayText = wp.spray_active ? 'SPRAY ON' : 'SPRAY OFF (TRANSIT)';
-
-            tr.innerHTML = `
-                <td>#${wp.seq}</td>
-                <td>${wp.x.toFixed(1)}</td>
-                <td>${wp.y.toFixed(1)}</td>
-                <td>${wp.z.toFixed(1)}</td>
-                <td><span class="${sprayClass}">${sprayText}</span></td>
-                <td>${wp.type}</td>
-                <td>Row ${wp.row}</td>
-            `;
-            tbody.appendChild(tr);
-        });
-    }
-
-    function refreshViews(data) {
-        updateMetrics(data);
-        updateTelemetry(data);
-        updateReviewUI(data);
-        if (viewer3D) viewer3D.loadWallData(data);
-        if (roverSim) roverSim.init(data);
-    }
-
-    const CLASS_OPTIONS = [
-        ['window', 'Window'],
-        ['door', 'Door'],
-        ['ac_unit', 'AC unit'],
-        ['meter_panel', 'Meter panel'],
-        ['pipe', 'Pipe'],
-        ['grill', 'Grill']
-    ];
-
-    function updateReviewUI(data) {
-        const pending = data.obstacles.filter((obs) => obs.type === 'unverified');
-
-        detectorBanner.hidden = data.detector !== 'classical-fallback';
-        reviewPanel.hidden = pending.length === 0;
-        exportCaution.hidden = pending.length === 0;
-        reviewCount.textContent = pending.length;
-        exportCaution.textContent =
-            `${pending.length} obstacle${pending.length === 1 ? '' : 's'} not reviewed. ` +
-            'The plan keeps clear of them, so exports are safe to use but may leave paintable wall unpainted.';
-
-        reviewList.innerHTML = '';
-        pending.forEach((obs) => {
-            const row = document.createElement('div');
-            row.className = 'review-row';
-
-            const info = document.createElement('div');
-            info.className = 'review-info';
-            const pct = Math.round((obs.confidence || 0) * 100);
-            info.textContent = obs.label + ' ';
-            const meta = document.createElement('span');
-            meta.textContent = `${pct}% sure, ${obs.w}×${obs.h} mm`;
-            info.appendChild(meta);
-
-            const select = document.createElement('select');
-            select.className = 'review-select';
-            select.setAttribute('aria-label', `Class for ${obs.label}`);
-            CLASS_OPTIONS.forEach(([value, text]) => {
-                const option = document.createElement('option');
-                option.value = value;
-                option.textContent = text;
-                if (value === obs.guess) option.selected = true;
-                select.appendChild(option);
-            });
-
-            const confirmBtn = document.createElement('button');
-            confirmBtn.type = 'button';
-            confirmBtn.className = 'export-btn';
-            confirmBtn.textContent = 'Confirm';
-            confirmBtn.addEventListener('click', () => resolveObstacle(obs.id, select.value));
-
-            const dismissBtn = document.createElement('button');
-            dismissBtn.type = 'button';
-            dismissBtn.className = 'export-btn';
-            dismissBtn.textContent = 'Dismiss';
-            dismissBtn.addEventListener('click', () => resolveObstacle(obs.id, null));
-
-            const actions = document.createElement('div');
-            actions.className = 'review-actions';
-            actions.append(select, confirmBtn, dismissBtn);
-
-            row.append(info, actions);
-            reviewList.appendChild(row);
-        });
-    }
-
-    function resolveObstacle(id, newType) {
-        if (!currentData) return;
-        if (replanInFlight) return;
-        const obstacles = currentData.obstacles
-            .map((obs) => (obs.id === id ? (newType ? { ...obs, type: newType } : null) : obs))
-            .filter(Boolean);
-        replan(obstacles, startCornerInput.value);
-    }
-
-    function clearSimResult() {
-        simGeneration += 1;
-        simResult = null;
-        simReport.style.display = 'none';
-        simReport.innerHTML = '';
-    }
-
-    // Replay the exported rover mission in the C++ rover simulator and draw what it did
-    simRoverBtn.addEventListener('click', () => {
-        if (!currentData || replanInFlight) return;
-        simRoverBtn.disabled = true;
-        const generation = simGeneration;
-        const plain = (text) => String(text).replace(/[<>&]/g, ' '); // server text goes into an HTML log line
-        appendLog('Replaying the mission in the rover simulator...', 'info');
-        fetch('/api/simulate_rover', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ slip: 0.03, gyro_bias: 0.01, seed: 1 })
-        })
-        .then((res) => res.json())
-        .then((body) => {
-            simRoverBtn.disabled = false;
-            if (generation !== simGeneration) {
-                appendLog('Rover simulator result dropped: the plan changed while it ran', 'info');
-                return;
-            }
-            if (!body.success) {
-                appendLog(`Rover simulator: ${plain(body.error)}`, 'warn');
-                return;
-            }
-            simResult = body;
-            showSimReport(body);
-            switchTab('2d');
-            render2DCanvas();
-            appendLog(body.ok ? 'Rover simulator run finished' : `Rover simulator stopped: ${plain(body.error)}`, body.ok ? 'success' : 'warn');
-        })
-        .catch((err) => {
-            simRoverBtn.disabled = false;
-            appendLog(`Rover simulator error: ${plain(err.message)}`, 'warn');
-        });
-    });
-
-    function showSimReport(result) {
-        simReport.innerHTML = '';
-        const summary = result.summary;
-        const lines = [
-            result.ok ? 'Run finished.' : `Stopped: ${result.error}`,
-            `Painted ${(summary.painted_mm / 1000).toFixed(1)} m of ${(summary.planned_spray_mm / 1000).toFixed(1)} m planned`,
-            `True position error, worst: x ${summary.max_truth_error_mm.x.toFixed(0)} mm, y ${summary.max_truth_error_mm.y.toFixed(0)} mm`,
-            `Rover believed itself, worst: x ${summary.max_reported_error_mm.x.toFixed(0)} mm, y ${summary.max_reported_error_mm.y.toFixed(0)} mm`,
-            `Simulated ${summary.duration_s.toFixed(0)} s, wheel slip ${(summary.slip * 100).toFixed(0)}%, gyro drift ${summary.gyro_bias_deg_s} deg/s`,
-            'Green: true path. Cyan dashed: path the rover reported.'
-        ];
-        lines.forEach((text) => {
-            const p = document.createElement('p');
-            p.textContent = text;
-            simReport.appendChild(p);
-        });
-        simReport.style.display = 'block';
-    }
-
-    // Why the planner chose this corner and direction, with every layout it scored
-    function showLayout(layout) {
-        layoutAdvice.innerHTML = '';
-        if (!layout) {
-            layoutAdvice.style.display = 'none';
-            return;
-        }
-        const reason = document.createElement('p');
-        reason.textContent = layout.reason;
-        layoutAdvice.appendChild(reason);
-        const table = document.createElement('table');
-        const head = table.insertRow();
-        ['#', 'Layout', 'Cross', 'Dry m', 'Turns'].forEach((text) => {
-            const th = document.createElement('th');
-            th.textContent = text;
-            head.appendChild(th);
-        });
-        layout.options.forEach((option) => {
-            const row = table.insertRow();
-            if (option.start_corner === layout.start_corner && option.direction === layout.direction) row.className = 'chosen';
-            [option.rank, `${option.direction} ${option.start_corner.replace('_', '-')}`, option.crossings,
-                option.transit_m.toFixed(1), option.turns].forEach((value) => {
-                row.insertCell().textContent = String(value);
-            });
-        });
-        layoutAdvice.appendChild(table);
-        layoutAdvice.style.display = 'block';
+    function markPlanned(data) {
+        const now = new Date().toTimeString().slice(0, 5);
+        setLast(`Planned ${now} · ${data.waypoints.length} waypoints`);
     }
 
     function replan(obstacles, startCorner = currentData.wall.start_corner) {
         const wall = currentData.wall;
-        appendLog('Re-planning mission with reviewed obstacles...', 'info');
+        appendLog('Re-planning with your changes');
         replanInFlight = true;
         reviewList.querySelectorAll('button, select').forEach((el) => { el.disabled = true; });
 
@@ -803,202 +594,722 @@ document.addEventListener('DOMContentLoaded', () => {
             clearSimResult();
             refreshViews(currentData);
             showLayout(body.layout);
-            if (body.correction_saved) appendLog('Your review was saved as a labelled photo in exports/corrections on this computer, for the next training round', 'info');
+            if (body.correction_saved) appendLog('Your review was saved as a labelled photo in exports/corrections on this computer, for the next training round');
             render2DCanvas();
-            appendLog(`Mission re-planned: ${body.obstacles.length} keep-out zones, ${body.waypoints.length} waypoints`, 'success');
+            appendLog(`Re-planned: ${body.obstacles.length} keep-outs, ${body.stats.num_rows} stripes, ${body.waypoints.length} waypoints`, 'success');
+            markPlanned(currentData);
             replanInFlight = false;
         })
         .catch((err) => {
-            appendLog(`Re-plan error: ${err.message}`, 'warn');
+            appendLog(`Re-plan failed: ${err.message}`, 'error');
             startCornerInput.value = currentData.wall.start_corner;
             replanInFlight = false;
             reviewList.querySelectorAll('button, select').forEach((el) => { el.disabled = false; });
         });
     }
 
-    // 2D High-Resolution Canvas Rendering
-    function render2DCanvas() {
-        if (!currentData) return;
+    function resolveObstacle(id, newType) {
+        if (!currentData || replanInFlight) return;
+        const obstacles = currentData.obstacles
+            .map((obs) => (obs.id === id ? (newType ? { ...obs, type: newType } : null) : obs))
+            .filter(Boolean);
+        replan(obstacles, startCornerInput.value);
+    }
 
-        const { wall, obstacles, waypoints } = currentData;
-        const width = canvas2d.width;
-        const height = canvas2d.height;
+    function refreshViews(data) {
+        updateMetrics(data);
+        updateObstacles(data);
+        updateReviewUI(data);
+        updateWaypoints(data);
+        exportButtons.forEach((btn) => { btn.disabled = false; });
+        if (viewer3D) viewer3D.loadWallData(data);
+        if (roverSim) roverSim.init(data);
+    }
 
-        ctx2d.clearRect(0, 0, width, height);
+    // ----- Inspector -----
 
-        // Dark industrial background
-        ctx2d.fillStyle = '#071217';
-        ctx2d.fillRect(0, 0, width, height);
+    function layoutText(layout) {
+        if (!layout) return '';
+        return `${layout.direction === 'vertical' ? 'Vertical' : 'Horizontal'} from ${CORNER_NAMES[layout.start_corner] || layout.start_corner}`;
+    }
 
-        const padX = 75;
-        const padY = 55;
-        const drawW = width - (padX * 2);
-        const drawH = height - (padY * 2);
+    function updateMetrics(data) {
+        const { wall, stats, metrics } = data;
+        layoutValue.textContent = String(stats.num_rows);
+        cellsValue.textContent = stats.waypoint_count.toLocaleString();
+        areaValue.textContent = `${metrics.net_paintable_area_m2} m²`;
+        distanceValue.textContent = `${stats.total_distance_m} m`;
+        paintVolValue.textContent = `${metrics.paint_volume_liters} L`;
+        cycleTimeValue.textContent = metrics.cycle_time_formatted;
+        cycleTimeValue.title = `At the nominal speed of ${metrics.nominal_speed_mps} m/s`;
+        $('statusWallBoundary').textContent = `${wall.width_mm} × ${wall.height_mm} mm`;
+        $('statusSprayDist').textContent = `${stats.spray_distance_m} m`;
+        statusWall.textContent = `${wall.width_mm} × ${wall.height_mm} mm`;
+        statusLayout.textContent = data.layout ? `${layoutText(data.layout)} · ${stats.num_rows} stripes` : '';
+    }
 
-        // Draw source image if available
-        if (loadedImage2D) {
-            ctx2d.save();
-            ctx2d.globalAlpha = 0.28;
-            ctx2d.drawImage(loadedImage2D, padX, padY, drawW, drawH);
-            ctx2d.restore();
+    function obstacleName(obs) {
+        return obs.type === 'unverified' ? `${obs.label} (unsure)` : obs.label;
+    }
+
+    function updateObstacles(data) {
+        activeObstacleCount.textContent = String(data.obstacles.length);
+        if (!data.obstacles.length) {
+            const empty = document.createElement('li');
+            empty.className = 'empty';
+            empty.textContent = 'No keep-outs. The whole wall is painted.';
+            obstacleList.replaceChildren(empty);
+            return;
         }
+        obstacleList.replaceChildren(...data.obstacles.map((obs) => {
+            const item = document.createElement('li');
+            item.className = 'obstacle-item';
+            item.dataset.id = obs.id;
+            const swatch = document.createElement('span');
+            swatch.className = obs.type === 'unverified' ? 'swatch unsure' : 'swatch';
+            const name = document.createElement('span');
+            name.className = 'obstacle-name';
+            name.textContent = obstacleName(obs);
+            const size = document.createElement('span');
+            size.className = 'obstacle-size';
+            size.textContent = `${Math.round(obs.w)} × ${Math.round(obs.h)}`;
+            item.append(swatch, name, size);
+            item.addEventListener('mouseenter', () => setHighlight(obs.id));
+            item.addEventListener('mouseleave', () => setHighlight(null));
+            return item;
+        }));
+    }
 
-        // Active paintable fill
-        ctx2d.fillStyle = 'rgba(92, 225, 210, 0.06)';
-        ctx2d.fillRect(padX, padY, drawW, drawH);
+    function updateReviewUI(data) {
+        const pending = data.obstacles.filter((obs) => obs.type === 'unverified');
 
-        // Outer wall boundary (Cyan)
-        ctx2d.strokeStyle = '#5ce1d2';
-        ctx2d.lineWidth = 2;
-        ctx2d.strokeRect(padX, padY, drawW, drawH);
+        detectorBanner.hidden = data.detector !== 'classical-fallback';
+        reviewPanel.hidden = pending.length === 0;
+        exportCaution.hidden = pending.length === 0;
+        reviewCount.textContent = String(pending.length);
+        exportCaution.textContent =
+            `${pending.length} obstacle${pending.length === 1 ? '' : 's'} not checked yet. ` +
+            'The plan keeps clear of them, so the exports are safe to use but may leave some wall unpainted.';
 
-        // Scale factors: mm to 2D canvas pixels
-        const scaleX = drawW / wall.width_mm;
-        const scaleY = drawH / wall.height_mm;
+        reviewList.replaceChildren(...pending.map((obs) => {
+            const row = document.createElement('div');
+            row.className = 'review-item';
+            row.addEventListener('mouseenter', () => setHighlight(obs.id));
+            row.addEventListener('mouseleave', () => setHighlight(null));
 
-        // Draw Obstacles (Keep-out zones)
-        obstacles.forEach((obs) => {
-            const ox = padX + (obs.x * scaleX);
-            const oy = padY + drawH - ((obs.y + obs.h) * scaleY); // Flip Y (origin at bottom-left)
-            const ow = obs.w * scaleX;
-            const oh = obs.h * scaleY;
+            const head = document.createElement('div');
+            head.className = 'review-head';
+            const name = document.createElement('span');
+            name.textContent = obs.label;
+            const meta = document.createElement('span');
+            meta.className = 'mono';
+            meta.textContent = `${Math.round((obs.confidence || 0) * 100)}% sure · ${Math.round(obs.w)} × ${Math.round(obs.h)}`;
+            head.append(name, meta);
 
-            // Obstacle fill & border: red for confirmed classes, dashed amber while unverified
-            const unverified = obs.type === 'unverified';
-            ctx2d.fillStyle = unverified ? 'rgba(244, 184, 96, 0.22)' : 'rgba(250, 116, 110, 0.25)';
-            ctx2d.fillRect(ox, oy, ow, oh);
+            const select = document.createElement('select');
+            select.className = 'field';
+            select.setAttribute('aria-label', `What ${obs.label} is`);
+            CLASS_OPTIONS.forEach(([value, text]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = text;
+                if (value === obs.guess) option.selected = true;
+                select.appendChild(option);
+            });
 
-            ctx2d.save();
-            if (unverified) ctx2d.setLineDash([6, 4]);
-            ctx2d.strokeStyle = unverified ? '#f4b860' : '#fa746e';
-            ctx2d.lineWidth = 2;
-            ctx2d.strokeRect(ox, oy, ow, oh);
-            ctx2d.restore();
+            const keepBtn = document.createElement('button');
+            keepBtn.type = 'button';
+            keepBtn.className = 'btn btn-small';
+            keepBtn.textContent = 'Keep clear';
+            keepBtn.title = 'It is an obstacle of this type; paint stays clear of it';
+            keepBtn.addEventListener('click', () => resolveObstacle(obs.id, select.value));
 
-            // Safety standoff buffer outline (Dashed Yellow/Orange)
-            const bufMm = wall.safety_buffer_mm || 60;
-            const bx = padX + (Math.max(0, obs.x - bufMm) * scaleX);
-            const by = padY + drawH - ((Math.min(wall.height_mm, obs.y + obs.h + bufMm)) * scaleY);
-            const bw = (obs.w + (bufMm * 2)) * scaleX;
-            const bh = (obs.h + (bufMm * 2)) * scaleY;
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'btn btn-small';
+            removeBtn.textContent = 'Not an obstacle';
+            removeBtn.title = 'Paint over this area';
+            removeBtn.addEventListener('click', () => resolveObstacle(obs.id, null));
 
-            ctx2d.save();
-            ctx2d.setLineDash([4, 4]);
-            ctx2d.strokeStyle = 'rgba(244, 184, 96, 0.5)';
-            ctx2d.strokeRect(bx, by, bw, bh);
-            ctx2d.restore();
+            const actions = document.createElement('div');
+            actions.className = 'review-actions';
+            actions.append(select, keepBtn, removeBtn);
 
-            // Label
-            ctx2d.fillStyle = unverified ? '#f4b860' : '#fa746e';
-            ctx2d.font = '10px "DM Mono", monospace';
-            ctx2d.fillText(obs.label, ox + 6, oy + 16);
-            ctx2d.fillStyle = '#a1b6b9';
-            ctx2d.font = '9px "DM Mono", monospace';
-            ctx2d.fillText(`${obs.w}×${obs.h}mm`, ox + 6, oy + 28);
+            row.append(head, actions);
+            return row;
+        }));
+    }
+
+    function setHighlight(id) {
+        if (highlightId === id) return;
+        highlightId = id;
+        obstacleList.querySelectorAll('.obstacle-item').forEach((item) => {
+            item.classList.toggle('hot', id !== null && item.dataset.id === String(id));
+        });
+        render2DCanvas();
+    }
+
+    // ----- Why this layout -----
+
+    function setAdviceOpen(open) {
+        layoutAdvice.hidden = !open;
+        layoutWhy.setAttribute('aria-expanded', String(open));
+    }
+
+    layoutWhy.addEventListener('click', () => setAdviceOpen(layoutAdvice.hidden));
+
+    // Why the planner chose this corner and direction, with every layout it scored
+    function showLayout(layout) {
+        layoutAdvice.replaceChildren();
+        layoutWhy.disabled = !layout;
+        if (!layout) {
+            setAdviceOpen(false);
+            return;
+        }
+        const reason = document.createElement('p');
+        reason.textContent = layout.reason;
+        const table = document.createElement('table');
+        const head = table.createTHead().insertRow();
+        ['#', 'Layout', 'Crossings', 'Moves, m', 'Turns'].forEach((text) => {
+            const th = document.createElement('th');
+            th.textContent = text;
+            head.appendChild(th);
+        });
+        const tbody = table.createTBody();
+        layout.options.forEach((option) => {
+            const row = tbody.insertRow();
+            if (option.start_corner === layout.start_corner && option.direction === layout.direction) row.className = 'chosen';
+            [option.rank, layoutText(option), option.crossings, option.transit_m.toFixed(1), option.turns].forEach((value) => {
+                row.insertCell().textContent = String(value);
+            });
+        });
+        layoutAdvice.append(reason, table);
+    }
+
+    // ----- Export -----
+
+    exportButtons.forEach((btn) => {
+        btn.disabled = true;
+        btn.addEventListener('click', () => downloadExport(btn.dataset.export));
+    });
+
+    function downloadExport(format) {
+        appendLog(`Downloading ${format.toUpperCase()}`);
+        const a = document.createElement('a');
+        a.href = `/api/download/${format}`;
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    function updateWaypoints(data) {
+        const tbody = $('telemetryBody');
+        const waypoints = data.waypoints || [];
+        const step = Math.max(1, Math.ceil(waypoints.length / 400));
+        const rows = [];
+        waypoints.forEach((wp, idx) => {
+            if (idx % step !== 0 && idx !== waypoints.length - 1) return;
+            const tr = document.createElement('tr');
+            [wp.seq, wp.x.toFixed(0), wp.y.toFixed(0), wp.spray_active ? 'On' : 'Off',
+                String(wp.type).toLowerCase().replace(/_/g, ' '), wp.row].forEach((value, col) => {
+                const td = tr.insertCell();
+                td.textContent = String(value);
+                if (col === 3 && wp.spray_active) td.className = 'spray-on';
+            });
+            rows.push(tr);
+        });
+        tbody.replaceChildren(...rows);
+        $('waypointNote').textContent = step > 1
+            ? `· every ${step}th of ${waypoints.length}; the CSV has all of them`
+            : `· ${waypoints.length}`;
+    }
+
+    // ----- Sweep preview -----
+
+    const simStartBtn = $('simStartBtn');
+    const simPauseBtn = $('simPauseBtn');
+    const simResetBtn = $('simResetBtn');
+    simStartBtn.addEventListener('click', () => roverSim && roverSim.start());
+    simPauseBtn.addEventListener('click', () => roverSim && roverSim.pause());
+    simResetBtn.addEventListener('click', () => roverSim && roverSim.reset());
+    document.querySelectorAll('.sim-speed-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.sim-speed-btn').forEach((b) => b.classList.toggle('active', b === btn));
+            if (roverSim) roverSim.setSpeed(Number(btn.dataset.speed) || 1);
+        });
+    });
+
+    // ----- Physics replay -----
+
+    function clearSimResult() {
+        simGeneration += 1;
+        simResult = null;
+        simReport.hidden = true;
+        simReport.replaceChildren();
+    }
+
+    // Replay the exported rover mission in the C++ rover simulator and draw what it did
+    simRoverBtn.addEventListener('click', () => {
+        if (!currentData || replanInFlight) return;
+        simRoverBtn.disabled = true;
+        const generation = simGeneration;
+        const plain = (text) => String(text).replace(/[<>&]/g, ' '); // server text, kept plain in the log
+        appendLog('Replaying the mission in the rover simulator');
+        fetch('/api/simulate_rover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slip: 0.03, gyro_bias: 0.01, seed: 1 })
+        })
+        .then((res) => res.json().then((body) => ({ status: res.status, body })))
+        .then(({ status, body }) => {
+            simRoverBtn.disabled = false;
+            if (generation !== simGeneration) {
+                appendLog('Replay result dropped: the plan changed while it ran');
+                return;
+            }
+            if (!body.success) {
+                if (status === 503) setSimulatorStatus(false);
+                appendLog(`Rover simulator: ${plain(body.error)}`, 'warn');
+                return;
+            }
+            simResult = body;
+            showSimReport(body);
+            render2DCanvas();
+            appendLog(body.ok ? 'Replay finished; the true path is drawn on the plan' : `Replay stopped: ${plain(body.error)}`, body.ok ? 'success' : 'warn');
+        })
+        .catch((err) => {
+            simRoverBtn.disabled = false;
+            appendLog(`Rover simulator: ${plain(err.message)}`, 'error');
+        });
+    });
+
+    function showSimReport(result) {
+        const summary = result.summary;
+        const verdict = document.createElement('p');
+        verdict.className = result.ok ? 'verdict good' : 'verdict bad';
+        verdict.textContent = result.ok ? 'Run finished' : `Stopped: ${result.error}`;
+
+        const facts = [
+            ['Painted', `${(summary.painted_mm / 1000).toFixed(1)} of ${(summary.planned_spray_mm / 1000).toFixed(1)} m`],
+            ['Worst true error', `x ${summary.max_truth_error_mm.x.toFixed(0)}, y ${summary.max_truth_error_mm.y.toFixed(0)} mm`],
+            ['Worst believed error', `x ${summary.max_reported_error_mm.x.toFixed(0)}, y ${summary.max_reported_error_mm.y.toFixed(0)} mm`],
+            ['Simulated time', `${summary.duration_s.toFixed(0)} s`],
+            ['Wheel slip', `${(summary.slip * 100).toFixed(0)}%`],
+            ['Gyro drift', `${summary.gyro_bias_deg_s} °/s`]
+        ];
+        const list = document.createElement('dl');
+        list.className = 'readouts';
+        facts.forEach(([label, value]) => {
+            const row = document.createElement('div');
+            const dt = document.createElement('dt');
+            dt.textContent = label;
+            const dd = document.createElement('dd');
+            dd.className = 'mono';
+            dd.textContent = value;
+            row.append(dt, dd);
+            list.appendChild(row);
         });
 
-        // Draw Boustrophedon Toolpath
-        if (waypoints && waypoints.length > 1) {
-            ctx2d.lineWidth = 2;
+        const show = document.createElement('button');
+        show.type = 'button';
+        show.className = 'btn btn-quiet';
+        show.textContent = 'Show on the plan';
+        show.addEventListener('click', () => switchTab('plan'));
 
-            for (let i = 1; i < waypoints.length; i++) {
-                const p1 = waypoints[i - 1];
-                const p2 = waypoints[i];
+        const note = document.createElement('p');
+        note.className = 'hint';
+        note.textContent = 'On the plan, the solid blue line is where the rover truly went; the dashed one is where it believed it was.';
 
-                const x1 = padX + (p1.x * scaleX);
-                const y1 = padY + drawH - (p1.y * scaleY);
-                const x2 = padX + (p2.x * scaleX);
-                const y2 = padY + drawH - (p2.y * scaleY);
+        simReport.replaceChildren(verdict, list, note, show);
+        simReport.hidden = false;
+    }
 
-                const isSpray = p1.spray_active && p2.spray_active && (p1.row === p2.row);
+    // ----- Plan layers, zoom and pan -----
 
-                ctx2d.beginPath();
-                ctx2d.moveTo(x1, y1);
-                ctx2d.lineTo(x2, y2);
+    [['layerPhoto', 'photo'], ['layerStripes', 'stripes'], ['layerTransit', 'transit'], ['layerKeepouts', 'keepouts']].forEach(([id, key]) => {
+        const btn = $(id);
+        btn.addEventListener('click', () => {
+            layers[key] = !layers[key];
+            btn.classList.toggle('on', layers[key]);
+            btn.setAttribute('aria-pressed', String(layers[key]));
+            render2DCanvas();
+        });
+    });
 
-                if (isSpray) {
-                    ctx2d.strokeStyle = '#f4b860'; // Golden Amber for active spray
-                    ctx2d.setLineDash([]);
-                } else {
-                    ctx2d.strokeStyle = 'rgba(157, 78, 221, 0.6)'; // Magenta for transit
-                    ctx2d.setLineDash([3, 3]);
+    $('fitBtn').addEventListener('click', () => {
+        planView = null;
+        render2DCanvas();
+    });
+
+    function currentView() {
+        return planView || (planGeom ? { s: planGeom.s, x0: planGeom.x0, y0: planGeom.y0 } : null);
+    }
+
+    canvas2d.addEventListener('wheel', (e) => {
+        const view = currentView();
+        if (!view || !planGeom) return;
+        e.preventDefault();
+        const rect = canvas2d.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const factor = Math.exp(-e.deltaY * 0.0015);
+        const s = Math.min(planGeom.fit * 20, Math.max(planGeom.fit * 0.5, view.s * factor));
+        const k = s / view.s;
+        planView = { s, x0: cx - (cx - view.x0) * k, y0: cy - (cy - view.y0) * k };
+        render2DCanvas();
+    }, { passive: false });
+
+    let drag = null;
+    canvas2d.addEventListener('pointerdown', (e) => {
+        const view = currentView();
+        if (!view) return;
+        drag = { x: e.clientX, y: e.clientY, view };
+        canvas2d.setPointerCapture(e.pointerId);
+        canvas2d.style.cursor = 'grabbing';
+    });
+    canvas2d.addEventListener('pointermove', (e) => {
+        if (drag) {
+            planView = { s: drag.view.s, x0: drag.view.x0 + e.clientX - drag.x, y0: drag.view.y0 + e.clientY - drag.y };
+            render2DCanvas();
+            return;
+        }
+        if (!planGeom || !currentData || !layers.keepouts) return;
+        const rect = canvas2d.getBoundingClientRect();
+        const x = (e.clientX - rect.left - planGeom.x0) / planGeom.s;
+        const y = currentData.wall.height_mm - (e.clientY - rect.top - planGeom.y0) / planGeom.s;
+        const hit = currentData.obstacles.find((obs) => x >= obs.x && x <= obs.x + obs.w && y >= obs.y && y <= obs.y + obs.h);
+        setHighlight(hit ? hit.id : null);
+    });
+    const endDrag = () => {
+        drag = null;
+        canvas2d.style.cursor = '';
+    };
+    canvas2d.addEventListener('pointerup', endDrag);
+    canvas2d.addEventListener('pointercancel', endDrag);
+    canvas2d.addEventListener('pointerleave', () => { if (!drag) setHighlight(null); });
+
+    // ----- The wall plan drawing -----
+
+    const MONO = '"IBM Plex Mono", ui-monospace, monospace';
+    const SANS = '"IBM Plex Sans", system-ui, sans-serif';
+
+    function labelBox(ctx, text, x, y, align, colours) {
+        ctx.font = `500 10px ${MONO}`;
+        const w = ctx.measureText(text).width + 8;
+        const left = align === 'right' ? x - w : align === 'center' ? x - w / 2 : x;
+        ctx.fillStyle = colours.bg;
+        ctx.fillRect(left, y - 8, w, 16);
+        if (colours.border) {
+            ctx.strokeStyle = colours.border;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(left + 0.5, y - 7.5, w - 1, 15);
+        }
+        ctx.fillStyle = colours.text;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, left + 4, y + 0.5);
+    }
+
+    // A dimension line with extension lines and architectural ticks, the length written on it
+    function dimension(ctx, ax, ay, bx, by, text, vertical, c) {
+        ctx.save();
+        ctx.strokeStyle = c.muted;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        [[ax, ay], [bx, by]].forEach(([x, y]) => {
+            ctx.moveTo(x - 4, y + 4);
+            ctx.lineTo(x + 4, y - 4);
+        });
+        ctx.stroke();
+        ctx.font = `500 11px ${MONO}`;
+        const w = ctx.measureText(text).width + 10;
+        ctx.translate((ax + bx) / 2, (ay + by) / 2);
+        if (vertical) ctx.rotate(-Math.PI / 2);
+        ctx.fillStyle = c.canvas;
+        ctx.fillRect(-w / 2, -8, w, 16);
+        ctx.fillStyle = c.text;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, 0, 0.5);
+        ctx.restore();
+    }
+
+    function niceScaleLength(s) {
+        const options = [100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000];
+        let best = options[0];
+        options.forEach((mm) => { if (mm * s <= 140) best = mm; });
+        return best;
+    }
+
+    function render2DCanvas() {
+        const cssW = viewport2d.clientWidth;
+        const cssH = viewport2d.clientHeight;
+        if (!cssW || !cssH) return;
+        const dpr = window.devicePixelRatio || 1;
+        if (canvas2d.width !== Math.round(cssW * dpr) || canvas2d.height !== Math.round(cssH * dpr)) {
+            canvas2d.width = Math.round(cssW * dpr);
+            canvas2d.height = Math.round(cssH * dpr);
+        }
+        const ctx = ctx2d;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const c = {
+            canvas: color('canvas'), wall: color('wall'), strong: color('strong'), line: color('line'),
+            text: color('text'), muted: color('muted'), accent: color('accent'), keep: color('keep'),
+            review: color('review'), trace: color('trace'), panel: color('panel')
+        };
+        ctx.fillStyle = c.canvas;
+        ctx.fillRect(0, 0, cssW, cssH);
+
+        if (!currentData) {
+            ctx.fillStyle = c.muted;
+            ctx.font = `400 13px ${SANS}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Planning the sample wall…', cssW / 2, cssH / 2);
+            return;
+        }
+
+        const { wall, obstacles, waypoints } = currentData;
+        const W = wall.width_mm;
+        const H = wall.height_mm;
+        const narrow = cssW < 560;
+        const margin = narrow ? { top: 56, right: 16, bottom: 56, left: 48 } : { top: 64, right: 40, bottom: 84, left: 76 };
+        const availW = Math.max(40, cssW - margin.left - margin.right);
+        const availH = Math.max(40, cssH - margin.top - margin.bottom);
+        const fit = Math.min(availW / W, availH / H);
+        const view = planView || { s: fit, x0: margin.left + (availW - W * fit) / 2, y0: margin.top + (availH - H * fit) / 2 };
+        const { s, x0, y0 } = view;
+        planGeom = { s, x0, y0, fit };
+        const X = (mm) => x0 + mm * s;
+        const Y = (mm) => y0 + (H - mm) * s;
+        const wallW = W * s;
+        const wallH = H * s;
+
+        // Wall surface and photo
+        ctx.fillStyle = c.wall;
+        ctx.fillRect(x0, y0, wallW, wallH);
+        if (layers.photo && loadedImage2D) {
+            ctx.save();
+            ctx.globalAlpha = window.APRTheme.get() === 'dark' ? 0.34 : 0.42;
+            ctx.drawImage(loadedImage2D, x0, y0, wallW, wallH);
+            ctx.restore();
+        }
+
+        // Stripes: the band the nozzle covers, and its centre line
+        const segments = [];
+        for (let i = 1; i < waypoints.length; i++) {
+            const a = waypoints[i - 1];
+            const b = waypoints[i];
+            segments.push({ a, b, spray: a.spray_active && b.spray_active && a.row === b.row });
+        }
+        ctx.lineCap = 'butt';
+        if (layers.stripes) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(x0, y0, wallW, wallH);
+            ctx.clip();
+            ctx.strokeStyle = c.accent;
+            ctx.globalAlpha = window.APRTheme.get() === 'dark' ? 0.1 : 0.14;
+            ctx.lineWidth = Math.max(1, wall.spray_width_mm * s);
+            segments.filter((seg) => seg.spray).forEach(({ a, b }) => {
+                ctx.beginPath();
+                ctx.moveTo(X(a.x), Y(a.y));
+                ctx.lineTo(X(b.x), Y(b.y));
+                ctx.stroke();
+            });
+            ctx.restore();
+            ctx.strokeStyle = c.accent;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            segments.filter((seg) => seg.spray).forEach(({ a, b }) => {
+                ctx.moveTo(X(a.x), Y(a.y));
+                ctx.lineTo(X(b.x), Y(b.y));
+            });
+            ctx.stroke();
+        }
+
+        // Moves with the spray off
+        if (layers.transit) {
+            ctx.save();
+            ctx.strokeStyle = c.muted;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            segments.filter((seg) => !seg.spray).forEach(({ a, b }) => {
+                ctx.moveTo(X(a.x), Y(a.y));
+                ctx.lineTo(X(b.x), Y(b.y));
+            });
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Keep-outs: the obstacle, its margin, its name and size
+        if (layers.keepouts) {
+            const margin_mm = wall.safety_buffer_mm || 0;
+            const placedLabels = [];
+            const overlaps = (r) => placedLabels.some((p) => r.x < p.x + p.w && r.x + r.w > p.x && r.y < p.y + p.h && r.y + r.h > p.y);
+            obstacles.forEach((obs) => {
+                const unsure = obs.type === 'unverified';
+                const hot = highlightId !== null && obs.id === highlightId;
+                const tone = unsure ? c.review : c.keep;
+                const ox = X(obs.x);
+                const oy = Y(obs.y + obs.h);
+                const ow = obs.w * s;
+                const oh = obs.h * s;
+
+                ctx.save();
+                ctx.globalAlpha = 0.5;
+                ctx.strokeStyle = tone;
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 3]);
+                const bx = X(Math.max(0, obs.x - margin_mm));
+                const by = Y(Math.min(H, obs.y + obs.h + margin_mm));
+                const bw = X(Math.min(W, obs.x + obs.w + margin_mm)) - bx;
+                const bh = Y(Math.max(0, obs.y - margin_mm)) - by;
+                ctx.strokeRect(bx + 0.5, by + 0.5, bw, bh);
+                ctx.restore();
+
+                ctx.save();
+                ctx.globalAlpha = hot ? 0.3 : (unsure ? 0.08 : 0.16);
+                ctx.fillStyle = tone;
+                ctx.fillRect(ox, oy, ow, oh);
+                ctx.globalAlpha = 1;
+                ctx.strokeStyle = tone;
+                ctx.lineWidth = hot ? 2.5 : 1.25;
+                if (unsure) ctx.setLineDash([5, 3]);
+                ctx.strokeRect(ox, oy, ow, oh);
+                ctx.restore();
+
+                const labelRect = { x: ox, y: oy, w: Math.min(ow, 150), h: 32 };
+                if (ow >= 78 && oh >= 34 && !overlaps(labelRect)) {
+                    placedLabels.push(labelRect);
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'alphabetic';
+                    ctx.fillStyle = tone;
+                    ctx.font = `500 11px ${SANS}`;
+                    ctx.fillText(obs.label, ox + 6, oy + 15, ow - 12);
+                    ctx.fillStyle = c.text;
+                    ctx.font = `400 10px ${MONO}`;
+                    ctx.fillText(`${Math.round(obs.w)} × ${Math.round(obs.h)}`, ox + 6, oy + 28, ow - 12);
                 }
-                ctx2d.stroke();
-            }
-            ctx2d.setLineDash([]);
+            });
+        }
 
-            // Draw Start / End indicators
+        // Stripe numbers in painting order, at the start of each stripe
+        if (layers.stripes) {
+            const firsts = [];
+            const seen = new Set();
+            waypoints.forEach((wp) => {
+                if (wp.spray_active && !seen.has(wp.row)) {
+                    seen.add(wp.row);
+                    firsts.push(wp);
+                }
+            });
+            const pitch = wall.spray_width_mm * (1 - (wall.overlap_pct || 0) / 100) * s;
+            const every = Math.max(1, Math.ceil(18 / Math.max(1, pitch)));
+            const vertical = (currentData.wall.direction || (currentData.layout && currentData.layout.direction)) === 'vertical';
+            firsts.forEach((wp, index) => {
+                if (index % every !== 0 && index !== firsts.length - 1) return;
+                const x = X(wp.x);
+                const y = Y(wp.y);
+                const inward = vertical ? 0 : (x < x0 + wallW / 2 ? 10 : -10);
+                const dy = vertical ? (y > y0 + wallH / 2 ? -12 : 12) : 0;
+                labelBox(ctx, String(index + 1), x + inward, y + dy, vertical ? 'center' : (inward >= 0 ? 'left' : 'right'),
+                    { bg: c.canvas, border: c.accent, text: c.text });
+            });
+        }
+
+        // Start and end of the path
+        if (waypoints.length > 1 && (layers.stripes || layers.transit)) {
             const first = waypoints[0];
             const last = waypoints[waypoints.length - 1];
-
-            const fx = padX + (first.x * scaleX);
-            const fy = padY + drawH - (first.y * scaleY);
-            ctx2d.fillStyle = '#f4b860';
-            ctx2d.beginPath();
-            ctx2d.arc(fx, fy, 6, 0, Math.PI * 2);
-            ctx2d.fill();
-            ctx2d.font = '10px "DM Mono", monospace';
-            const startLabel = `START (${Math.round(first.x)}, ${Math.round(first.y)})`;
-            const labelX = fx > width / 2 ? fx - 10 - ctx2d.measureText(startLabel).width : fx + 10;
-            ctx2d.fillText(startLabel, labelX, fy - 5);
-
-            const lx = padX + (last.x * scaleX);
-            const ly = padY + drawH - (last.y * scaleY);
-            ctx2d.fillStyle = '#5ce1d2';
-            ctx2d.beginPath();
-            ctx2d.arc(lx, ly, 6, 0, Math.PI * 2);
-            ctx2d.fill();
-            ctx2d.fillText('END', lx + 10, ly + 14);
+            ctx.fillStyle = c.accent;
+            ctx.beginPath();
+            ctx.arc(X(first.x), Y(first.y), 4.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = c.text;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(X(last.x), Y(last.y), 4.5, 0, Math.PI * 2);
+            ctx.stroke();
         }
 
-        // Rover simulator replay: true path (green) and the path the rover itself reported (cyan dashed)
+        // Rover simulator replay: where the rover truly went (solid) and where it believed it was (dashed)
         if (simResult && simResult.steps && simResult.steps.length) {
-            const toCanvas = (pose) => [padX + (pose.x * scaleX), padY + drawH - (pose.y * scaleY)];
-            const trace = (poses, colour, dash) => {
-                ctx2d.beginPath();
+            const trace = (poses, dash, alpha) => {
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.beginPath();
                 poses.forEach((pose, index) => {
-                    const [cx, cy] = toCanvas(pose);
-                    if (index === 0) ctx2d.moveTo(cx, cy); else ctx2d.lineTo(cx, cy);
+                    if (index === 0) ctx.moveTo(X(pose.x), Y(pose.y)); else ctx.lineTo(X(pose.x), Y(pose.y));
                 });
-                ctx2d.setLineDash(dash);
-                ctx2d.strokeStyle = colour;
-                ctx2d.lineWidth = 2;
-                ctx2d.stroke();
-                ctx2d.setLineDash([]);
+                ctx.setLineDash(dash);
+                ctx.strokeStyle = c.trace;
+                ctx.lineWidth = 1.75;
+                ctx.stroke();
+                ctx.restore();
             };
-            trace([simResult.start, ...simResult.steps.map((step) => step.reported)], 'rgba(92, 225, 210, 0.9)', [5, 4]);
-            trace([simResult.start, ...simResult.steps.map((step) => step.truth)], '#7bd88f', []);
+            trace([simResult.start, ...simResult.steps.map((step) => step.reported)], [5, 4], 0.7);
+            trace([simResult.start, ...simResult.steps.map((step) => step.truth)], [], 1);
         }
 
-        // Coordinate Corner Marks
-        ctx2d.font = '10px "DM Mono", monospace';
-        ctx2d.fillStyle = '#7d969d';
-        ctx2d.fillText('X:0, Y:0 (Origin)', padX - 10, padY + drawH + 20);
-        ctx2d.fillText(`X:${wall.width_mm}, Y:0`, padX + drawW - 75, padY + drawH + 20);
-        ctx2d.fillText(`X:0, Y:${wall.height_mm}`, padX - 10, padY - 14);
-        ctx2d.fillText(`X:${wall.width_mm}, Y:${wall.height_mm}`, padX + drawW - 85, padY - 14);
+        // Wall outline
+        ctx.strokeStyle = c.strong;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x0 + 0.5, y0 + 0.5, wallW - 1, wallH - 1);
+
+        // Dimensions in mm
+        const bottom = y0 + wallH;
+        const dimY = bottom + (narrow ? 18 : 26);
+        const dimX = x0 - (narrow ? 18 : 26);
+        ctx.strokeStyle = c.muted;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x0, bottom + 5); ctx.lineTo(x0, dimY + 6);
+        ctx.moveTo(x0 + wallW, bottom + 5); ctx.lineTo(x0 + wallW, dimY + 6);
+        ctx.moveTo(x0 - 5, y0); ctx.lineTo(dimX - 6, y0);
+        ctx.moveTo(x0 - 5, bottom); ctx.lineTo(dimX - 6, bottom);
+        ctx.stroke();
+        dimension(ctx, x0, dimY, x0 + wallW, dimY, `${W} mm`, false, c);
+        dimension(ctx, dimX, bottom, dimX, y0, `${H} mm`, true, c);
+
+        // Scale bar
+        const barMm = niceScaleLength(s);
+        const barPx = barMm * s;
+        const barX = cssW - (narrow ? 16 : 24) - barPx;
+        const barY = cssH - (narrow ? 18 : 22);
+        ctx.fillStyle = c.muted;
+        ctx.strokeStyle = c.muted;
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 4; i++) {
+            const segX = barX + (barPx / 4) * i;
+            if (i % 2 === 0) ctx.fillRect(segX, barY, barPx / 4, 4);
+        }
+        ctx.strokeRect(barX + 0.5, barY + 0.5, barPx - 1, 4);
+        ctx.font = `400 10px ${MONO}`;
+        ctx.textBaseline = 'alphabetic';
+        ctx.textAlign = 'left';
+        ctx.fillText('0', barX, barY - 4);
+        ctx.textAlign = 'right';
+        ctx.fillText(barMm >= 1000 ? `${barMm / 1000} m` : `${barMm} mm`, barX + barPx, barY - 4);
     }
 
-    function appendLog(message, type = 'info') {
-        const time = new Date().toTimeString().split(' ')[0];
-        const div = document.createElement('div');
-        div.className = type;
-        div.innerHTML = `<b>${time}</b> &nbsp;${message}`;
-
-        // Keep cursor at bottom
-        const cursor = logContainer.querySelector('.cursor');
-        if (cursor) cursor.remove();
-
-        logContainer.appendChild(div);
-
-        const cursorSpan = document.createElement('span');
-        cursorSpan.className = 'cursor';
-        cursorSpan.textContent = ' ▌';
-        div.appendChild(cursorSpan);
-
-        logContainer.scrollTop = logContainer.scrollHeight;
+    // Redraw when the plan panel changes size, and once the fonts have arrived
+    if (window.ResizeObserver) {
+        new ResizeObserver(() => { if (activeTab === 'plan') render2DCanvas(); }).observe(viewport2d);
+        new ResizeObserver(() => {
+            if (activeTab === '3d' && viewer3D) viewer3D.onResize();
+            if (activeTab === 'simulate' && roverSim) { roverSim.resize(); roverSim.render(); }
+        }).observe($('stage'));
+    } else {
+        window.addEventListener('resize', () => render2DCanvas());
     }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => render2DCanvas());
 
-    // Initial load
+    // First plan
     runAnalysis();
 });
