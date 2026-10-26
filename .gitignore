@@ -14,4 +14,4 @@ training/runs/
 rover/sim/build/
 
 # team photo drops and downloaded datasets: never commit (privacy, licences)
-photos/
+/photos/
